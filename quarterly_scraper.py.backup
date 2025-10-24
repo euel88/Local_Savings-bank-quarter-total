@@ -2040,12 +2040,12 @@ class BankScraper:
                 for col in df.columns:
                     try:
                         cell_value = str(df.iloc[idx][col]).strip()
-
+                        
                         # 총자산 찾기
                         if '총자산' in cell_value or '자산총계' in cell_value:
-                            # 당기 데이터 - current_cols가 있을 때만 추출
-                            if financial_data['당기_총자산'] is None and current_cols:
-                                for target_col in current_cols:
+                            # 당기 데이터
+                            if financial_data['당기_총자산'] is None:
+                                for target_col in current_cols or df.columns:
                                     if target_col != col:
                                         try:
                                             value = pd.to_numeric(str(df.iloc[idx][target_col]).replace(',', ''), errors='coerce')
@@ -2069,9 +2069,9 @@ class BankScraper:
                         
                         # 자기자본 찾기
                         if ('자기자본' in cell_value or '자본총계' in cell_value or '자본합계' in cell_value) and '자산' not in cell_value:
-                            # 당기 데이터 - current_cols가 있을 때만 추출
-                            if financial_data['당기_자기자본'] is None and current_cols:
-                                for target_col in current_cols:
+                            # 당기 데이터
+                            if financial_data['당기_자기자본'] is None:
+                                for target_col in current_cols or df.columns:
                                     if target_col != col:
                                         try:
                                             value = pd.to_numeric(str(df.iloc[idx][target_col]).replace(',', ''), errors='coerce')
@@ -2081,10 +2081,10 @@ class BankScraper:
                                                     break
                                         except:
                                             pass
-
-                            # 전년동기 데이터 - previous_cols가 있을 때만 추출
-                            if financial_data['전년동기_자기자본'] is None and previous_cols:
-                                for target_col in previous_cols:
+                            
+                            # 전년동기 데이터
+                            if financial_data['전년동기_자기자본'] is None:
+                                for target_col in previous_cols or []:
                                     if target_col != col:
                                         try:
                                             value = pd.to_numeric(str(df.iloc[idx][target_col]).replace(',', ''), errors='coerce')
@@ -2110,9 +2110,9 @@ class BankScraper:
                         
                         # 총여신 찾기
                         if '총여신' in cell_value or '여신총계' in cell_value or '대출채권' in cell_value:
-                            # 당기 데이터 - current_cols가 있을 때만 추출
-                            if financial_data['당기_총여신'] is None and current_cols:
-                                for target_col in current_cols:
+                            # 당기 데이터
+                            if financial_data['당기_총여신'] is None:
+                                for target_col in current_cols or df.columns:
                                     if target_col != col:
                                         try:
                                             value = pd.to_numeric(str(df.iloc[idx][target_col]).replace(',', ''), errors='coerce')
@@ -2121,10 +2121,10 @@ class BankScraper:
                                                 break
                                         except:
                                             pass
-
-                            # 전년동기 데이터 - previous_cols가 있을 때만 추출
-                            if financial_data['전년동기_총여신'] is None and previous_cols:
-                                for target_col in previous_cols:
+                            
+                            # 전년동기 데이터
+                            if financial_data['전년동기_총여신'] is None:
+                                for target_col in previous_cols or []:
                                     if target_col != col:
                                         try:
                                             value = pd.to_numeric(str(df.iloc[idx][target_col]).replace(',', ''), errors='coerce')
@@ -2133,12 +2133,12 @@ class BankScraper:
                                                 break
                                         except:
                                             pass
-
+                        
                         # 총수신 찾기
                         if '총수신' in cell_value or '수신총계' in cell_value or '예수금' in cell_value:
-                            # 당기 데이터 - current_cols가 있을 때만 추출
-                            if financial_data['당기_총수신'] is None and current_cols:
-                                for target_col in current_cols:
+                            # 당기 데이터
+                            if financial_data['당기_총수신'] is None:
+                                for target_col in current_cols or df.columns:
                                     if target_col != col:
                                         try:
                                             value = pd.to_numeric(str(df.iloc[idx][target_col]).replace(',', ''), errors='coerce')
@@ -2147,10 +2147,10 @@ class BankScraper:
                                                 break
                                         except:
                                             pass
-
-                            # 전년동기 데이터 - previous_cols가 있을 때만 추출
-                            if financial_data['전년동기_총수신'] is None and previous_cols:
-                                for target_col in previous_cols:
+                            
+                            # 전년동기 데이터
+                            if financial_data['전년동기_총수신'] is None:
+                                for target_col in previous_cols or []:
                                     if target_col != col:
                                         try:
                                             value = pd.to_numeric(str(df.iloc[idx][target_col]).replace(',', ''), errors='coerce')
@@ -2175,9 +2175,9 @@ class BankScraper:
                         
                         # 수익합계 찾기
                         if '수익합계' in cell_value or '영업수익' in cell_value or '총수익' in cell_value:
-                            # 당기 데이터 - current_cols가 있을 때만 추출
-                            if financial_data['당기_수익합계'] is None and current_cols:
-                                for target_col in current_cols:
+                            # 당기 데이터
+                            if financial_data['당기_수익합계'] is None:
+                                for target_col in current_cols or df.columns:
                                     if target_col != col:
                                         try:
                                             value = pd.to_numeric(str(df.iloc[idx][target_col]).replace(',', ''), errors='coerce')
@@ -2187,9 +2187,9 @@ class BankScraper:
                                         except:
                                             pass
                             
-                            # 전년동기 데이터 - previous_cols가 있을 때만 추출
-                            if financial_data['전년동기_수익합계'] is None and previous_cols:
-                                for target_col in previous_cols:
+                            # 전년동기 데이터
+                            if financial_data['전년동기_수익합계'] is None:
+                                for target_col in previous_cols or []:
                                     if target_col != col:
                                         try:
                                             value = pd.to_numeric(str(df.iloc[idx][target_col]).replace(',', ''), errors='coerce')
@@ -2201,9 +2201,9 @@ class BankScraper:
                         
                         # 비용합계 찾기
                         if '비용합계' in cell_value or '영업비용' in cell_value or '총비용' in cell_value:
-                            # 당기 데이터 - current_cols가 있을 때만 추출
-                            if financial_data['당기_비용합계'] is None and current_cols:
-                                for target_col in current_cols:
+                            # 당기 데이터
+                            if financial_data['당기_비용합계'] is None:
+                                for target_col in current_cols or df.columns:
                                     if target_col != col:
                                         try:
                                             value = pd.to_numeric(str(df.iloc[idx][target_col]).replace(',', ''), errors='coerce')
@@ -2213,9 +2213,9 @@ class BankScraper:
                                         except:
                                             pass
                             
-                            # 전년동기 데이터 - previous_cols가 있을 때만 추출
-                            if financial_data['전년동기_비용합계'] is None and previous_cols:
-                                for target_col in previous_cols:
+                            # 전년동기 데이터
+                            if financial_data['전년동기_비용합계'] is None:
+                                for target_col in previous_cols or []:
                                     if target_col != col:
                                         try:
                                             value = pd.to_numeric(str(df.iloc[idx][target_col]).replace(',', ''), errors='coerce')
@@ -2301,9 +2301,9 @@ class BankScraper:
                         
                         # 고정이하여신비율 찾기
                         if '고정이하여신비율' in cell_value or 'NPL' in cell_value:
-                            # 당기 데이터 - current_cols가 있을 때만 추출
-                            if financial_data['당기_고정이하여신비율(%)'] is None and current_cols:
-                                for target_col in current_cols:
+                            # 당기 데이터
+                            if financial_data['당기_고정이하여신비율(%)'] is None:
+                                for target_col in current_cols or df.columns:
                                     if target_col != col:
                                         try:
                                             value_str = str(df.iloc[idx][target_col]).replace('%', '').replace(',', '').strip()
@@ -2314,9 +2314,9 @@ class BankScraper:
                                         except:
                                             pass
                             
-                            # 전년동기 데이터 - previous_cols가 있을 때만 추출
-                            if financial_data['전년동기_고정이하여신비율(%)'] is None and previous_cols:
-                                for target_col in previous_cols:
+                            # 전년동기 데이터
+                            if financial_data['전년동기_고정이하여신비율(%)'] is None:
+                                for target_col in previous_cols or []:
                                     if target_col != col:
                                         try:
                                             value_str = str(df.iloc[idx][target_col]).replace('%', '').replace(',', '').strip()
@@ -2329,9 +2329,9 @@ class BankScraper:
                         
                         # 위험가중자산에 대한 자기자본비율 찾기
                         if 'BIS' in cell_value or '자기자본비율' in cell_value or '위험가중자산' in cell_value:
-                            # 당기 데이터 - current_cols가 있을 때만 추출
-                            if financial_data['당기_위험가중자산에_대한_자기자본비율(%)'] is None and current_cols:
-                                for target_col in current_cols:
+                            # 당기 데이터
+                            if financial_data['당기_위험가중자산에_대한_자기자본비율(%)'] is None:
+                                for target_col in current_cols or df.columns:
                                     if target_col != col:
                                         try:
                                             value_str = str(df.iloc[idx][target_col]).replace('%', '').replace(',', '').strip()
@@ -2342,9 +2342,9 @@ class BankScraper:
                                         except:
                                             pass
                             
-                            # 전년동기 데이터 - previous_cols가 있을 때만 추출
-                            if financial_data['전년동기_위험가중자산에_대한_자기자본비율(%)'] is None and previous_cols:
-                                for target_col in previous_cols:
+                            # 전년동기 데이터
+                            if financial_data['전년동기_위험가중자산에_대한_자기자본비율(%)'] is None:
+                                for target_col in previous_cols or []:
                                     if target_col != col:
                                         try:
                                             value_str = str(df.iloc[idx][target_col]).replace('%', '').replace(',', '').strip()
@@ -3150,34 +3150,33 @@ class BankScraper:
 
 # GUI 클래스 (탭용으로 수정된 버전)
 class QuarterlyScraperTab:
-    def __init__(self, parent, simplified=False):
+    def __init__(self, parent):
         self.parent = parent
         self.frame = ttk.Frame(parent)  # 탭용 프레임 생성
-        self.simplified = simplified  # 단순화 모드 플래그
-
+        
         # 구성 설정
         self.config = Config()
         self.logger = Logger(self.config, self)
         self.progress_status = {}  # 은행별 진행 상태 저장
-
+        
         # 실행 상태 변수
         self.running = False
         self.scraper = None
         self.driver_manager = None
         self.progress_manager = None
-
+        
         # 자동 압축 변수 초기화
         self.auto_zip_var = tk.BooleanVar(value=self.config.auto_zip)
-
+        
         # MD 생성 옵션 변수 초기화
         self.save_md_var = tk.BooleanVar(value=False)
-
+        
         # 메인 프레임
         self.create_widgets()
-
+        
         # 초기 은행 목록 로드
         self.load_bank_list()
-
+        
         # 설정 로드
         self.load_settings()
     
@@ -3256,39 +3255,38 @@ class QuarterlyScraperTab:
         self.log_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         self.log_text.config(state=tk.DISABLED)
         
-        # 버튼 프레임
+        # 버튼 프레임 - 수정된 버튼 배치
         button_frame = ttk.Frame(self.main_frame)
         button_frame.pack(fill=tk.X, padx=5, pady=5)
-
-        # 주요 기능 버튼
+        
+        # 첫 번째 줄 버튼들
         button_row1 = ttk.Frame(button_frame)
         button_row1.pack(fill=tk.X, pady=2)
-
+        
         self.start_button = ttk.Button(button_row1, text="스크래핑 시작", command=self.start_scraping)
         self.start_button.pack(side=tk.LEFT, padx=5)
-
+        
         self.stop_button = ttk.Button(button_row1, text="중지", command=self.stop_scraping, state=tk.DISABLED)
         self.stop_button.pack(side=tk.LEFT, padx=5)
-
+        
         ttk.Button(button_row1, text="설정 저장", command=self.save_settings).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_row1, text="결과 폴더 열기", command=self.open_output_folder).pack(side=tk.LEFT, padx=5)
-
-        # 단순화 모드가 아닐 때만 추가 버튼 표시
-        if not self.simplified:
-            ttk.Button(button_row1, text="요약 보고서 생성", command=self.generate_report).pack(side=tk.LEFT, padx=5)
-
-            # 두 번째 줄 버튼들 - 확장된 기능들
-            button_row2 = ttk.Frame(button_frame)
-            button_row2.pack(fill=tk.X, pady=2)
-
-            ttk.Button(button_row2, text="📊 통합 재무 보고서 (당기/전년 비교)",
-                       command=self.create_financial_consolidation_with_selection).pack(side=tk.LEFT, padx=5)
-
-            ttk.Button(button_row2, text="📝 MD 요약 보고서",
-                       command=self.generate_md_summary_report).pack(side=tk.LEFT, padx=5)
-
-            ttk.Button(button_row2, text="🗜️ 데이터 압축", command=self.compress_and_download).pack(side=tk.LEFT, padx=5)
-            ttk.Button(button_row2, text="🔄 진행 상태 초기화", command=self.reset_progress).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_row1, text="요약 보고서 생성", command=self.generate_report).pack(side=tk.LEFT, padx=5)
+        
+        # 두 번째 줄 버튼들 - 확장된 기능들
+        button_row2 = ttk.Frame(button_frame)
+        button_row2.pack(fill=tk.X, pady=2)
+        
+        ttk.Button(button_row2, text="📊 통합 재무 보고서 (당기/전년 비교)", 
+                   command=self.create_financial_consolidation_with_selection).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(button_row2, text="📝 MD 요약 보고서", 
+                   command=self.generate_md_summary_report).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(button_row2, text="🗜️ 데이터 압축", command=self.compress_and_download).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_row2, text="🔄 진행 상태 초기화", command=self.reset_progress).pack(side=tk.LEFT, padx=5)
+        
+        # 상태바는 제거 (메인 윈도우에서 관리)
     
     # 나머지 메서드들은 동일하므로 생략...
     # (browse_chrome_driver_path, save_settings, load_bank_list, load_settings 등은 기존과 동일)
