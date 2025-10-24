@@ -4502,6 +4502,7 @@ class SettlementScraperTab:
                 try:
                     # 은행명 추출 (파일명에서)
                     bank_name = os.path.basename(excel_file).split('_')[0]
+                    self.frame.after(0, lambda b=bank_name: self.logger.log_message(f"  📂 {b} 처리 중..."))
 
                     # 엑셀 파일 읽기
                     excel_data = pd.ExcelFile(excel_file)
@@ -4512,17 +4513,26 @@ class SettlementScraperTab:
                     # 영업개황 시트에서 데이터 추출
                     if '영업개황' in excel_data.sheet_names:
                         df_business = pd.read_excel(excel_file, sheet_name='영업개황')
-                        row_data.update(self._extract_business_summary(df_business))
+                        extracted = self._extract_business_summary(df_business)
+                        row_data.update(extracted)
+                        self.frame.after(0, lambda b=bank_name, d=extracted:
+                                       self.logger.log_message(f"    영업개황: {len(d)}개 항목 추출"))
 
                     # 손익현황 시트에서 데이터 추출
                     if '손익현황' in excel_data.sheet_names:
                         df_income = pd.read_excel(excel_file, sheet_name='손익현황')
-                        row_data.update(self._extract_income_summary(df_income))
+                        extracted = self._extract_income_summary(df_income)
+                        row_data.update(extracted)
+                        self.frame.after(0, lambda b=bank_name, d=extracted:
+                                       self.logger.log_message(f"    손익현황: {len(d)}개 항목 추출"))
 
                     # 기타 시트에서 데이터 추출
                     if '기타' in excel_data.sheet_names:
                         df_other = pd.read_excel(excel_file, sheet_name='기타')
-                        row_data.update(self._extract_other_summary(df_other))
+                        extracted = self._extract_other_summary(df_other)
+                        row_data.update(extracted)
+                        self.frame.after(0, lambda b=bank_name, d=extracted:
+                                       self.logger.log_message(f"    기타: {len(d)}개 항목 추출"))
 
                     summary_data.append(row_data)
 
@@ -4590,32 +4600,63 @@ class SettlementScraperTab:
 
         try:
             # DataFrame이 비어있지 않은지 확인
-            if df.empty:
+            if df.empty or len(df.columns) < 2:
                 return data
 
-            # 첫 번째 열을 항목명으로 사용
-            if len(df.columns) < 2:
-                return data
+            # 첫 번째 열을 항목명으로, 가장 최근 데이터는 마지막에서 두 번째 열 또는 두 번째 열
+            # (마지막 열은 종종 비고나 증감률일 수 있음)
+            item_col_idx = 0
 
-            # 데이터 추출 (가장 최근 분기는 보통 두 번째 열)
+            # 데이터 열 찾기 (숫자 데이터가 많은 열)
+            data_col_idx = None
+            for col_idx in range(1, len(df.columns)):
+                # 숫자로 변환 가능한 데이터 개수 확인
+                numeric_count = 0
+                for val in df.iloc[:, col_idx]:
+                    if self._safe_convert_number(val) is not None:
+                        numeric_count += 1
+
+                # 숫자 데이터가 많으면 데이터 열로 판단
+                if numeric_count > len(df) * 0.3:  # 30% 이상이 숫자면 데이터 열
+                    data_col_idx = col_idx
+                    break
+
+            # 데이터 열을 찾지 못하면 두 번째 열 사용
+            if data_col_idx is None:
+                data_col_idx = 1
+
+            # 데이터 추출
             for idx, row in df.iterrows():
-                item_name = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
+                try:
+                    item_name = str(row.iloc[item_col_idx]).strip() if pd.notna(row.iloc[item_col_idx]) else ""
+                    item_name_lower = item_name.lower().replace(' ', '')
 
-                # 총자산
-                if '총자산' in item_name or '총 자산' in item_name:
-                    data['총자산(최근분기)'] = self._safe_convert_number(row.iloc[1])
+                    # 총자산
+                    if '총자산' in item_name or '총 자산' in item_name:
+                        value = self._safe_convert_number(row.iloc[data_col_idx])
+                        if value is not None:
+                            data['총자산(최근분기)'] = value
 
-                # 자기자본
-                elif '자기자본' in item_name:
-                    data['자기자본(최근분기)'] = self._safe_convert_number(row.iloc[1])
+                    # 자기자본 (자본총계 포함)
+                    elif '자기자본' in item_name or '자본총계' in item_name or '자본 총계' in item_name:
+                        value = self._safe_convert_number(row.iloc[data_col_idx])
+                        if value is not None:
+                            data['자기자본(최근분기)'] = value
 
-                # 총여신
-                elif '총여신' in item_name or '총 여신' in item_name:
-                    data['총여신(최근분기)'] = self._safe_convert_number(row.iloc[1])
+                    # 총여신
+                    elif '총여신' in item_name or '총 여신' in item_name or '여신총액' in item_name:
+                        value = self._safe_convert_number(row.iloc[data_col_idx])
+                        if value is not None:
+                            data['총여신(최근분기)'] = value
 
-                # 총수신
-                elif '총수신' in item_name or '총 수신' in item_name:
-                    data['총수신(최근분기)'] = self._safe_convert_number(row.iloc[1])
+                    # 총수신
+                    elif '총수신' in item_name or '총 수신' in item_name or '수신총액' in item_name:
+                        value = self._safe_convert_number(row.iloc[data_col_idx])
+                        if value is not None:
+                            data['총수신(최근분기)'] = value
+
+                except Exception as e:
+                    continue
 
         except Exception as e:
             pass
@@ -4630,16 +4671,50 @@ class SettlementScraperTab:
             if df.empty or len(df.columns) < 2:
                 return data
 
+            # 항목명 열
+            item_col_idx = 0
+
+            # 데이터 열 찾기
+            data_col_idx = None
+            for col_idx in range(1, len(df.columns)):
+                numeric_count = 0
+                for val in df.iloc[:, col_idx]:
+                    if self._safe_convert_number(val) is not None:
+                        numeric_count += 1
+
+                if numeric_count > len(df) * 0.3:
+                    data_col_idx = col_idx
+                    break
+
+            if data_col_idx is None:
+                data_col_idx = 1
+
             for idx, row in df.iterrows():
-                item_name = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
+                try:
+                    item_name = str(row.iloc[item_col_idx]).strip() if pd.notna(row.iloc[item_col_idx]) else ""
 
-                # 당기순이익 (분기)
-                if '당기순이익' in item_name and '누계' not in item_name:
-                    data['당기순이익(최근분기)'] = self._safe_convert_number(row.iloc[1])
+                    # 당기순이익 (분기) - 누계가 아닌 경우
+                    if '당기순이익' in item_name:
+                        if '누계' not in item_name and '누적' not in item_name:
+                            value = self._safe_convert_number(row.iloc[data_col_idx])
+                            if value is not None and '당기순이익(최근분기)' not in data:
+                                data['당기순이익(최근분기)'] = value
 
-                # 당기순이익 (누계)
-                elif '당기순이익' in item_name and '누계' in item_name:
-                    data['당기순이익(누계)'] = self._safe_convert_number(row.iloc[1])
+                        # 당기순이익 (누계)
+                        elif '누계' in item_name or '누적' in item_name:
+                            value = self._safe_convert_number(row.iloc[data_col_idx])
+                            if value is not None:
+                                data['당기순이익(누계)'] = value
+
+                    # 당기순손익으로 표기되는 경우도 처리
+                    elif '당기순손익' in item_name or '당기 순손익' in item_name:
+                        if '누계' not in item_name and '누적' not in item_name:
+                            value = self._safe_convert_number(row.iloc[data_col_idx])
+                            if value is not None and '당기순이익(최근분기)' not in data:
+                                data['당기순이익(최근분기)'] = value
+
+                except Exception as e:
+                    continue
 
         except Exception as e:
             pass
@@ -4654,16 +4729,48 @@ class SettlementScraperTab:
             if df.empty or len(df.columns) < 2:
                 return data
 
+            # 항목명 열
+            item_col_idx = 0
+
+            # 데이터 열 찾기
+            data_col_idx = None
+            for col_idx in range(1, len(df.columns)):
+                numeric_count = 0
+                for val in df.iloc[:, col_idx]:
+                    if self._safe_convert_number(val) is not None:
+                        numeric_count += 1
+
+                if numeric_count > len(df) * 0.3:
+                    data_col_idx = col_idx
+                    break
+
+            if data_col_idx is None:
+                data_col_idx = 1
+
             for idx, row in df.iterrows():
-                item_name = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
+                try:
+                    item_name = str(row.iloc[item_col_idx]).strip() if pd.notna(row.iloc[item_col_idx]) else ""
 
-                # BIS 자기자본비율
-                if 'BIS' in item_name and '자기자본' in item_name and '비율' in item_name:
-                    data['BIS자기자본비율(%)'] = self._safe_convert_number(row.iloc[1])
+                    # BIS 자기자본비율
+                    if 'BIS' in item_name and '자기자본' in item_name and '비율' in item_name:
+                        value = self._safe_convert_number(row.iloc[data_col_idx])
+                        if value is not None:
+                            data['BIS자기자본비율(%)'] = value
 
-                # 고정이하여신비율
-                elif '고정이하' in item_name and '여신' in item_name and '비율' in item_name:
-                    data['고정이하여신비율(%)'] = self._safe_convert_number(row.iloc[1])
+                    # 고정이하여신비율
+                    elif '고정이하' in item_name and '여신' in item_name and '비율' in item_name:
+                        value = self._safe_convert_number(row.iloc[data_col_idx])
+                        if value is not None:
+                            data['고정이하여신비율(%)'] = value
+
+                    # NPL 비율도 추가 (고정이하여신비율의 다른 표현)
+                    elif ('NPL' in item_name or 'npl' in item_name.lower()) and '비율' in item_name:
+                        value = self._safe_convert_number(row.iloc[data_col_idx])
+                        if value is not None and '고정이하여신비율(%)' not in data:
+                            data['고정이하여신비율(%)'] = value
+
+                except Exception as e:
+                    continue
 
         except Exception as e:
             pass
