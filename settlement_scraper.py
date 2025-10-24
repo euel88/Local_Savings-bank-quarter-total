@@ -4535,13 +4535,34 @@ class SettlementScraperTab:
     def _run_consolidated_summary(self):
         """통합자료 생성 실행"""
         try:
-            import pandas as pd
             import glob
+            import pandas as pd
 
             self.frame.after(0, lambda: self.logger.log_message("📊 엑셀 파일 수집 중..."))
 
             # 출력 디렉토리에서 모든 은행의 엑셀 파일 찾기
-            excel_files = glob.glob(os.path.join(self.config.output_dir, "*_결산공시_*.xlsx"))
+            excel_patterns = [
+                os.path.join(self.config.output_dir, "*_결산공시_*.xlsx"),
+                os.path.join(self.config.output_dir, "*_결산_*.xlsx"),
+            ]
+
+            excel_files = []
+            for pattern in excel_patterns:
+                excel_files.extend(glob.glob(pattern))
+
+            # 통합 산출물 등 불필요한 파일 제외 및 중복 제거
+            filtered_files = []
+            seen = set()
+            for file_path in excel_files:
+                file_name = os.path.basename(file_path)
+                if file_name.startswith("통합자료_"):
+                    continue
+                if file_name in seen:
+                    continue
+                seen.add(file_name)
+                filtered_files.append(file_path)
+
+            excel_files = sorted(filtered_files)
 
             if not excel_files:
                 self.frame.after(0, lambda: messagebox.showwarning("경고", "엑셀 파일을 찾을 수 없습니다.\n먼저 스크래핑을 실행해주세요."))
@@ -4556,6 +4577,12 @@ class SettlementScraperTab:
                 try:
                     # 은행명 추출 (파일명에서)
                     bank_name = os.path.basename(excel_file).split('_')[0]
+
+                    if bank_name not in self.config.BANKS:
+                        self.frame.after(0, lambda b=bank_name: self.logger.log_message(
+                            f"⚠️  통합 대상 제외: {b} (은행 목록에 없음)"
+                        ))
+                        continue
 
                     # 엑셀 파일 읽기
                     excel_data = pd.ExcelFile(excel_file)
@@ -4591,13 +4618,7 @@ class SettlementScraperTab:
             # DataFrame 생성
             df_summary = pd.DataFrame(summary_data)
 
-            # 총자산 기준으로 정렬 (내림차순)
-            if '총자산(최근분기)' in df_summary.columns:
-                df_summary = df_summary.sort_values('총자산(최근분기)', ascending=False, na_position='last')
-                # No 열 추가
-                df_summary.insert(0, 'No', range(1, len(df_summary) + 1))
-
-            # 열 순서 재정렬
+            # 필요한 열이 없을 경우를 대비하여 기본 열 추가
             column_order = [
                 'No', '은행명', '총자산(최근분기)',
                 '당기순이익(최근분기)', '당기순이익(누계)',
@@ -4605,7 +4626,20 @@ class SettlementScraperTab:
                 'BIS자기자본비율(%)', '고정이하여신비율(%)'
             ]
 
-            # 존재하는 열만 선택
+            for col in column_order:
+                if col not in df_summary.columns and col != 'No':
+                    df_summary[col] = pd.NA
+
+            # 총자산 기준으로 정렬 (내림차순), 없으면 은행명 기준
+            if '총자산(최근분기)' in df_summary.columns and df_summary['총자산(최근분기)'].notna().any():
+                df_summary = df_summary.sort_values('총자산(최근분기)', ascending=False, na_position='last')
+            else:
+                df_summary = df_summary.sort_values('은행명')
+
+            df_summary = df_summary.reset_index(drop=True)
+            df_summary.insert(0, 'No', range(1, len(df_summary) + 1))
+
+            # 열 순서 재정렬 (존재하는 열만 사용)
             existing_columns = [col for col in column_order if col in df_summary.columns]
             df_summary = df_summary[existing_columns]
 
