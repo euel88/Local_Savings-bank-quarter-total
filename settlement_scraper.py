@@ -3604,6 +3604,7 @@ class SettlementScraperTab:
         self.stop_button = ttk.Button(main_buttons_frame, text="중지", command=self.stop_scraping, state=tk.DISABLED)
         self.stop_button.pack(side=tk.LEFT, padx=5)
 
+        ttk.Button(main_buttons_frame, text="📋 통합자료 작성", command=self.create_consolidated_summary).pack(side=tk.LEFT, padx=5)
         ttk.Button(main_buttons_frame, text="설정 저장", command=self.save_settings).pack(side=tk.LEFT, padx=5)
         ttk.Button(main_buttons_frame, text="결과 폴더 열기", command=self.open_output_folder).pack(side=tk.LEFT, padx=5)
 
@@ -4451,16 +4452,298 @@ class SettlementScraperTab:
                 # 진행 관리자 초기화
                 self.progress_manager = ProgressManager(self.config, self.logger)
                 self.progress_manager.reset_progress()
-                
+
                 # 상태 업데이트
                 for bank in self.config.BANKS:
                     self.update_bank_status(bank, "대기 중")
-                
+
                 messagebox.showinfo("완료", "진행 상태가 초기화되었습니다.")
                 self.logger.log_message("진행 상태 초기화 완료")
-            
+
             except Exception as e:
                 messagebox.showerror("오류", f"진행 상태 초기화 중 오류 발생: {str(e)}")
+
+    def create_consolidated_summary(self):
+        """79개사 통합자료 생성 (엑셀 + MD)"""
+        try:
+            self.logger.log_message("📋 통합자료 작성 시작...")
+
+            # 별도 스레드에서 실행
+            threading.Thread(
+                target=self._run_consolidated_summary,
+                daemon=True
+            ).start()
+
+        except Exception as e:
+            messagebox.showerror("오류", f"통합자료 생성 중 오류 발생: {str(e)}")
+            self.logger.log_message(f"통합자료 생성 오류: {str(e)}")
+
+    def _run_consolidated_summary(self):
+        """통합자료 생성 실행"""
+        try:
+            import pandas as pd
+            import glob
+
+            self.frame.after(0, lambda: self.logger.log_message("📊 엑셀 파일 수집 중..."))
+
+            # 출력 디렉토리에서 모든 은행의 엑셀 파일 찾기
+            excel_files = glob.glob(os.path.join(self.config.output_dir, "*_결산공시_*.xlsx"))
+
+            if not excel_files:
+                self.frame.after(0, lambda: messagebox.showwarning("경고", "엑셀 파일을 찾을 수 없습니다.\n먼저 스크래핑을 실행해주세요."))
+                return
+
+            self.frame.after(0, lambda: self.logger.log_message(f"📊 {len(excel_files)}개 파일 발견"))
+
+            # 통합 데이터를 저장할 리스트
+            summary_data = []
+
+            for excel_file in excel_files:
+                try:
+                    # 은행명 추출 (파일명에서)
+                    bank_name = os.path.basename(excel_file).split('_')[0]
+
+                    # 엑셀 파일 읽기
+                    excel_data = pd.ExcelFile(excel_file)
+
+                    # 각 시트별 데이터 추출
+                    row_data = {'은행명': bank_name}
+
+                    # 영업개황 시트에서 데이터 추출
+                    if '영업개황' in excel_data.sheet_names:
+                        df_business = pd.read_excel(excel_file, sheet_name='영업개황')
+                        row_data.update(self._extract_business_summary(df_business))
+
+                    # 손익현황 시트에서 데이터 추출
+                    if '손익현황' in excel_data.sheet_names:
+                        df_income = pd.read_excel(excel_file, sheet_name='손익현황')
+                        row_data.update(self._extract_income_summary(df_income))
+
+                    # 기타 시트에서 데이터 추출
+                    if '기타' in excel_data.sheet_names:
+                        df_other = pd.read_excel(excel_file, sheet_name='기타')
+                        row_data.update(self._extract_other_summary(df_other))
+
+                    summary_data.append(row_data)
+
+                except Exception as e:
+                    self.frame.after(0, lambda b=bank_name, err=str(e):
+                                   self.logger.log_message(f"⚠️  {b} 데이터 추출 실패: {err}"))
+
+            if not summary_data:
+                self.frame.after(0, lambda: messagebox.showerror("오류", "데이터를 추출할 수 없습니다."))
+                return
+
+            # DataFrame 생성
+            df_summary = pd.DataFrame(summary_data)
+
+            # 총자산 기준으로 정렬 (내림차순)
+            if '총자산(최근분기)' in df_summary.columns:
+                df_summary = df_summary.sort_values('총자산(최근분기)', ascending=False, na_position='last')
+                # No 열 추가
+                df_summary.insert(0, 'No', range(1, len(df_summary) + 1))
+
+            # 열 순서 재정렬
+            column_order = [
+                'No', '은행명', '총자산(최근분기)',
+                '당기순이익(최근분기)', '당기순이익(누계)',
+                '자기자본(최근분기)', '총여신(최근분기)', '총수신(최근분기)',
+                'BIS자기자본비율(%)', '고정이하여신비율(%)'
+            ]
+
+            # 존재하는 열만 선택
+            existing_columns = [col for col in column_order if col in df_summary.columns]
+            df_summary = df_summary[existing_columns]
+
+            # 엑셀 파일 저장
+            output_excel = os.path.join(self.config.output_dir, f'통합자료_결산공시_{self.config.today}.xlsx')
+            df_summary.to_excel(output_excel, index=False, engine='openpyxl')
+
+            self.frame.after(0, lambda: self.logger.log_message(f"✅ 엑셀 파일 생성: {output_excel}"))
+
+            # MD 파일 생성
+            output_md = os.path.join(self.config.output_dir, f'통합자료_결산공시_{self.config.today}.md')
+            self._create_summary_md(df_summary, output_md)
+
+            self.frame.after(0, lambda: self.logger.log_message(f"✅ MD 파일 생성: {output_md}"))
+
+            # 완료 메시지
+            self.frame.after(0, lambda: messagebox.showinfo(
+                "완료",
+                f"📋 통합자료 생성 완료!\n\n"
+                f"✅ 총 {len(df_summary)}개 은행 데이터 통합\n"
+                f"📊 엑셀: {os.path.basename(output_excel)}\n"
+                f"📝 MD: {os.path.basename(output_md)}\n\n"
+                f"파일 위치: {self.config.output_dir}"
+            ))
+
+            # 엑셀 파일 열기 여부 확인
+            self.frame.after(0, lambda: self._ask_open_excel_file(output_excel))
+
+        except Exception as e:
+            self.frame.after(0, lambda err=str(e): messagebox.showerror("오류", f"통합자료 생성 중 오류:\n{err}"))
+            self.frame.after(0, lambda err=str(e): self.logger.log_message(f"❌ 통합자료 생성 오류: {err}"))
+
+    def _extract_business_summary(self, df):
+        """영업개황 시트에서 요약 데이터 추출"""
+        data = {}
+
+        try:
+            # DataFrame이 비어있지 않은지 확인
+            if df.empty:
+                return data
+
+            # 첫 번째 열을 항목명으로 사용
+            if len(df.columns) < 2:
+                return data
+
+            # 데이터 추출 (가장 최근 분기는 보통 두 번째 열)
+            for idx, row in df.iterrows():
+                item_name = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
+
+                # 총자산
+                if '총자산' in item_name or '총 자산' in item_name:
+                    data['총자산(최근분기)'] = self._safe_convert_number(row.iloc[1])
+
+                # 자기자본
+                elif '자기자본' in item_name:
+                    data['자기자본(최근분기)'] = self._safe_convert_number(row.iloc[1])
+
+                # 총여신
+                elif '총여신' in item_name or '총 여신' in item_name:
+                    data['총여신(최근분기)'] = self._safe_convert_number(row.iloc[1])
+
+                # 총수신
+                elif '총수신' in item_name or '총 수신' in item_name:
+                    data['총수신(최근분기)'] = self._safe_convert_number(row.iloc[1])
+
+        except Exception as e:
+            pass
+
+        return data
+
+    def _extract_income_summary(self, df):
+        """손익현황 시트에서 요약 데이터 추출"""
+        data = {}
+
+        try:
+            if df.empty or len(df.columns) < 2:
+                return data
+
+            for idx, row in df.iterrows():
+                item_name = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
+
+                # 당기순이익 (분기)
+                if '당기순이익' in item_name and '누계' not in item_name:
+                    data['당기순이익(최근분기)'] = self._safe_convert_number(row.iloc[1])
+
+                # 당기순이익 (누계)
+                elif '당기순이익' in item_name and '누계' in item_name:
+                    data['당기순이익(누계)'] = self._safe_convert_number(row.iloc[1])
+
+        except Exception as e:
+            pass
+
+        return data
+
+    def _extract_other_summary(self, df):
+        """기타 시트에서 요약 데이터 추출"""
+        data = {}
+
+        try:
+            if df.empty or len(df.columns) < 2:
+                return data
+
+            for idx, row in df.iterrows():
+                item_name = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
+
+                # BIS 자기자본비율
+                if 'BIS' in item_name and '자기자본' in item_name and '비율' in item_name:
+                    data['BIS자기자본비율(%)'] = self._safe_convert_number(row.iloc[1])
+
+                # 고정이하여신비율
+                elif '고정이하' in item_name and '여신' in item_name and '비율' in item_name:
+                    data['고정이하여신비율(%)'] = self._safe_convert_number(row.iloc[1])
+
+        except Exception as e:
+            pass
+
+        return data
+
+    def _safe_convert_number(self, value):
+        """안전하게 숫자로 변환"""
+        try:
+            if pd.isna(value):
+                return None
+
+            # 문자열인 경우 쉼표 제거
+            if isinstance(value, str):
+                value = value.replace(',', '').replace('%', '').strip()
+
+            # 숫자로 변환
+            return float(value)
+
+        except:
+            return None
+
+    def _create_summary_md(self, df, output_path):
+        """통합자료 MD 파일 생성"""
+        try:
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(f"# 저축은행 통합자료 (결산공시)\n\n")
+                f.write(f"생성일시: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                f.write(f"## 📊 데이터 요약\n\n")
+                f.write(f"- 총 은행 수: {len(df)}개\n")
+                f.write(f"- 데이터 기준: 최근 분기\n\n")
+
+                f.write(f"## 📋 전체 데이터\n\n")
+
+                # 마크다운 테이블 생성
+                # 헤더
+                headers = df.columns.tolist()
+                f.write("| " + " | ".join(headers) + " |\n")
+                f.write("| " + " | ".join(["---"] * len(headers)) + " |\n")
+
+                # 데이터 행
+                for _, row in df.iterrows():
+                    values = []
+                    for col in headers:
+                        val = row[col]
+                        if pd.isna(val):
+                            values.append("-")
+                        elif isinstance(val, (int, float)):
+                            if col in ['No']:
+                                values.append(str(int(val)))
+                            elif '%' in col:
+                                values.append(f"{val:.2f}")
+                            else:
+                                values.append(f"{val:,.0f}")
+                        else:
+                            values.append(str(val))
+
+                    f.write("| " + " | ".join(values) + " |\n")
+
+                f.write(f"\n\n## 📈 주요 통계\n\n")
+
+                # 통계 추가
+                if '총자산(최근분기)' in df.columns:
+                    total_assets = df['총자산(최근분기)'].sum()
+                    f.write(f"- 전체 총자산 합계: {total_assets:,.0f} 백만원\n")
+
+                if '당기순이익(누계)' in df.columns:
+                    total_profit = df['당기순이익(누계)'].sum()
+                    f.write(f"- 전체 당기순이익 합계: {total_profit:,.0f} 백만원\n")
+
+                f.write(f"\n---\n")
+                f.write(f"*자동 생성된 보고서입니다.*\n")
+
+        except Exception as e:
+            raise Exception(f"MD 파일 생성 실패: {str(e)}")
+
+    def _ask_open_excel_file(self, file_path):
+        """엑셀 파일 열기 여부 확인"""
+        if messagebox.askyesno("파일 열기", "생성된 엑셀 파일을 여시겠습니까?"):
+            self.open_excel_file(file_path)
 
 
 # main 함수와 실행 부분은 주석 처리 (탭 버전에서는 불필요)
