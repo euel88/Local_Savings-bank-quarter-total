@@ -426,26 +426,31 @@ class DriverManager:
                     driver = webdriver.Chrome(service=service, options=options)
                     self.logger.log_message(f"지정된 ChromeDriver 사용: {self.config.chrome_driver_path}", verbose=False)
                 else:
-                    # ChromeDriver 자동 다운로드 오류 방지
+                    # ChromeDriver 자동 다운로드 (최신 버전 사용)
                     from selenium.webdriver.chrome.service import Service
                     from webdriver_manager.chrome import ChromeDriverManager
-                    
-                    # 캐시 모드 설정 (오프라인 사용)
+
+                    # 캐시 디렉토리 설정
                     os.environ['WDM_LOCAL_CACHE_DIR'] = os.path.join(os.path.expanduser("~"), ".wdm", "drivers")
-                    os.environ['WDM_OFFLINE'] = "true"  # 오프라인 모드로 설정
                     os.environ['WDM_LOG_LEVEL'] = '0'   # 로깅 레벨 최소화
-                    
-                    # 캐시된 드라이버 사용
+
+                    # 최신 ChromeDriver 자동 다운로드 및 설치
+                    self.logger.log_message("ChromeDriver 자동 설치 중...", verbose=False)
                     service = Service(ChromeDriverManager().install())
-                    
+
                     # 서비스 로그 수준 설정
                     service.log_path = os.devnull  # 로그 출력을 /dev/null로 리다이렉션
-                    
+
                     driver = webdriver.Chrome(service=service, options=options)
+                    self.logger.log_message("ChromeDriver 자동 설치 완료", verbose=False)
             except Exception as e:
-                self.logger.log_message(f"ChromeDriver 자동 설치 실패, 기본 방식으로 시도: {str(e)}", verbose=False)
-                # 자동 설치 실패 시 기본 방식으로 시도
-                driver = webdriver.Chrome(options=options)
+                self.logger.log_message(f"ChromeDriver 자동 설치 실패: {str(e)}", verbose=True)
+                raise Exception(f"ChromeDriver 초기화 실패. Chrome 브라우저와 호환되는 ChromeDriver가 필요합니다.\n"
+                              f"오류: {str(e)}\n\n"
+                              f"해결 방법:\n"
+                              f"1. Chrome 브라우저를 최신 버전으로 업데이트하세요\n"
+                              f"2. 또는 ChromeDriver 경로를 수동으로 지정하세요\n"
+                              f"3. webdriver-manager 패키지 재설치: pip install --upgrade webdriver-manager")
             
             driver.set_page_load_timeout(self.config.PAGE_LOAD_TIMEOUT)
             return driver
