@@ -422,26 +422,52 @@ class DriverManager:
                     driver = webdriver.Chrome(service=service, options=options)
                     self.logger.log_message(f"지정된 ChromeDriver 사용: {self.config.chrome_driver_path}", verbose=False)
                 else:
-                    # ChromeDriver 자동 다운로드 오류 방지
-                    from selenium.webdriver.chrome.service import Service
-                    from webdriver_manager.chrome import ChromeDriverManager
-                    
-                    # 캐시 모드 설정 (오프라인 사용)
-                    os.environ['WDM_LOCAL_CACHE_DIR'] = os.path.join(os.path.expanduser("~"), ".wdm", "drivers")
-                    os.environ['WDM_OFFLINE'] = "true"  # 오프라인 모드로 설정
-                    os.environ['WDM_LOG_LEVEL'] = '0'   # 로깅 레벨 최소화
-                    
-                    # 캐시된 드라이버 사용
-                    service = Service(ChromeDriverManager().install())
-                    
-                    # 서비스 로그 수준 설정
-                    service.log_path = os.devnull  # 로그 출력을 /dev/null로 리다이렉션
-                    
-                    driver = webdriver.Chrome(service=service, options=options)
+                    # ChromeDriver 경로가 지정되지 않은 경우
+                    error_msg = (
+                        "ChromeDriver 경로가 지정되지 않았습니다.\n\n"
+                        "보안을 위해 자동 다운로드를 지원하지 않습니다.\n"
+                        "ChromeDriver를 수동으로 다운로드하고 경로를 지정해주세요.\n\n"
+                        "다운로드 방법:\n"
+                        f"1. Chrome 브라우저 버전 확인: chrome://version/\n"
+                        f"2. ChromeDriver 다운로드: https://googlechromelabs.github.io/chrome-for-testing/\n"
+                        f"3. Chrome 버전에 맞는 ChromeDriver 다운로드 (예: Chrome 141 → ChromeDriver 141)\n"
+                        f"4. GUI에서 '찾아보기' 버튼을 클릭하여 ChromeDriver 경로 지정\n\n"
+                        f"현재 Chrome 버전을 확인하려면 Chrome 브라우저를 열고\n"
+                        f"주소창에 'chrome://version/'을 입력하세요."
+                    )
+                    self.logger.log_message(error_msg, verbose=True)
+                    raise Exception(error_msg)
             except Exception as e:
-                self.logger.log_message(f"ChromeDriver 자동 설치 실패, 기본 방식으로 시도: {str(e)}", verbose=False)
-                # 자동 설치 실패 시 기본 방식으로 시도
-                driver = webdriver.Chrome(options=options)
+                error_str = str(e)
+
+                # ChromeDriver 버전 불일치 오류인 경우
+                if "This version of ChromeDriver only supports Chrome version" in error_str:
+                    import re
+                    # ChromeDriver 버전 추출
+                    chromedriver_version_match = re.search(r'Chrome version (\d+)', error_str)
+                    # Chrome 브라우저 버전 추출
+                    chrome_version_match = re.search(r'Current browser version is ([\d.]+)', error_str)
+
+                    chromedriver_version = chromedriver_version_match.group(1) if chromedriver_version_match else "알 수 없음"
+                    chrome_version = chrome_version_match.group(1) if chrome_version_match else "알 수 없음"
+
+                    error_msg = (
+                        f"❌ ChromeDriver 버전 불일치 오류\n\n"
+                        f"ChromeDriver 버전: {chromedriver_version}\n"
+                        f"Chrome 브라우저 버전: {chrome_version}\n\n"
+                        f"해결 방법:\n"
+                        f"1. Chrome {chrome_version.split('.')[0]} 버전에 맞는 ChromeDriver 다운로드\n"
+                        f"   다운로드 링크: https://googlechromelabs.github.io/chrome-for-testing/\n\n"
+                        f"2. 다운로드 후 GUI에서 '찾아보기' 버튼으로 경로 지정\n\n"
+                        f"참고:\n"
+                        f"- Chrome 버전 확인: chrome://version/\n"
+                        f"- ChromeDriver와 Chrome 브라우저의 메이저 버전이 일치해야 합니다"
+                    )
+                    self.logger.log_message(error_msg, verbose=True)
+                    raise Exception(error_msg)
+                else:
+                    # 기타 오류
+                    raise
             
             driver.set_page_load_timeout(self.config.PAGE_LOAD_TIMEOUT)
             return driver
@@ -3183,10 +3209,35 @@ class QuarterlyScraperTab:
     
     def create_widgets(self):
         """GUI 위젯을 생성합니다."""
-        # 메인 프레임 설정 - self.frame을 부모로 사용
-        self.main_frame = ttk.Frame(self.frame, padding="10")
-        self.main_frame.pack(fill=tk.BOTH, expand=True)
-        
+        # 스크롤 가능한 캔버스 생성
+        canvas = tk.Canvas(self.frame, borderwidth=0, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(self.frame, orient="vertical", command=canvas.yview)
+        self.main_frame = ttk.Frame(canvas, padding="10")
+
+        # 스크롤바 설정
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        # 레이아웃
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        canvas_frame = canvas.create_window((0, 0), window=self.main_frame, anchor="nw")
+
+        # 캔버스 크기 조정 이벤트
+        def on_frame_configure(event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def on_canvas_configure(event):
+            canvas.itemconfig(canvas_frame, width=event.width)
+
+        self.main_frame.bind("<Configure>", on_frame_configure)
+        canvas.bind("<Configure>", on_canvas_configure)
+
+        # 마우스 휠 스크롤 지원
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+
+        canvas.bind_all("<MouseWheel>", on_mousewheel)
+
         # 상단 프레임 (설정)
         self.settings_frame = ttk.LabelFrame(self.main_frame, text="설정", padding="5")
         self.settings_frame.pack(fill=tk.X, padx=5, pady=5)
@@ -3215,9 +3266,12 @@ class QuarterlyScraperTab:
         
         # MD 생성 옵션 추가
         self.save_md_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(self.settings_frame, text="📝 MD 파일도 함께 생성", 
+        ttk.Checkbutton(self.settings_frame, text="📝 MD 파일도 함께 생성",
                        variable=self.save_md_var).grid(row=3, column=0, sticky=tk.W, padx=5, pady=5)
-        
+
+        # 설정 프레임의 column 1을 확장 가능하게 설정
+        self.settings_frame.columnconfigure(1, weight=1)
+
         # 중앙 프레임 (은행 선택)
         self.bank_frame = ttk.LabelFrame(self.main_frame, text="은행 선택", padding="5")
         self.bank_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
