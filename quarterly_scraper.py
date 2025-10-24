@@ -4223,7 +4223,20 @@ class QuarterlyScraperTab:
             self.frame.after(0, lambda: self.logger.log_message("📊 엑셀 파일 수집 중..."))
 
             # 출력 디렉토리에서 모든 은행의 엑셀 파일 찾기
-            excel_files = glob.glob(os.path.join(self.config.output_dir, "*_분기공시_*.xlsx"))
+            # 실제 파일명 패턴: {bank_name}_{date_info}.xlsx
+            all_excel_files = glob.glob(os.path.join(self.config.output_dir, "*.xlsx"))
+
+            # 통합자료 파일은 제외 (통합자료_분기공시_로 시작하는 파일)
+            excel_files = [f for f in all_excel_files if not os.path.basename(f).startswith('통합자료_')]
+
+            # 은행 목록으로 필터링 (79개 은행만)
+            filtered_files = []
+            for excel_file in excel_files:
+                bank_name = os.path.basename(excel_file).split('_')[0]
+                if bank_name in self.config.BANKS:
+                    filtered_files.append(excel_file)
+
+            excel_files = filtered_files
 
             if not excel_files:
                 self.frame.after(0, lambda: messagebox.showwarning("경고", "엑셀 파일을 찾을 수 없습니다.\n먼저 스크래핑을 실행해주세요."))
@@ -4238,10 +4251,15 @@ class QuarterlyScraperTab:
                 try:
                     # 은행명 추출 (파일명에서)
                     bank_name = os.path.basename(excel_file).split('_')[0]
-                    self.frame.after(0, lambda b=bank_name: self.logger.log_message(f"  📂 {b} 처리 중..."))
+                    self.frame.after(0, lambda b=bank_name, f=excel_file:
+                                   self.logger.log_message(f"  📂 {b} 처리 중... ({os.path.basename(f)})"))
 
                     # 엑셀 파일 읽기
                     excel_data = pd.ExcelFile(excel_file)
+
+                    # 시트 목록 출력
+                    self.frame.after(0, lambda sheets=excel_data.sheet_names:
+                                   self.logger.log_message(f"    시트: {', '.join(sheets)}"))
 
                     # 각 시트별 데이터 추출
                     row_data = {'은행명': bank_name}
@@ -4251,24 +4269,29 @@ class QuarterlyScraperTab:
                         df_business = pd.read_excel(excel_file, sheet_name='영업개황')
                         extracted = self._extract_business_summary(df_business)
                         row_data.update(extracted)
-                        self.frame.after(0, lambda b=bank_name, d=extracted:
-                                       self.logger.log_message(f"    영업개황: {len(d)}개 항목 추출"))
+                        self.frame.after(0, lambda d=extracted:
+                                       self.logger.log_message(f"    ✓ 영업개황: {list(d.keys())}"))
 
                     # 손익현황 시트에서 데이터 추출
                     if '손익현황' in excel_data.sheet_names:
                         df_income = pd.read_excel(excel_file, sheet_name='손익현황')
                         extracted = self._extract_income_summary(df_income)
                         row_data.update(extracted)
-                        self.frame.after(0, lambda b=bank_name, d=extracted:
-                                       self.logger.log_message(f"    손익현황: {len(d)}개 항목 추출"))
+                        self.frame.after(0, lambda d=extracted:
+                                       self.logger.log_message(f"    ✓ 손익현황: {list(d.keys())}"))
 
                     # 기타 시트에서 데이터 추출
                     if '기타' in excel_data.sheet_names:
                         df_other = pd.read_excel(excel_file, sheet_name='기타')
                         extracted = self._extract_other_summary(df_other)
                         row_data.update(extracted)
-                        self.frame.after(0, lambda b=bank_name, d=extracted:
-                                       self.logger.log_message(f"    기타: {len(d)}개 항목 추출"))
+                        self.frame.after(0, lambda d=extracted:
+                                       self.logger.log_message(f"    ✓ 기타: {list(d.keys())}"))
+
+                    # 추출된 총 데이터 항목 수 출력
+                    data_count = len([k for k in row_data.keys() if k != '은행명'])
+                    self.frame.after(0, lambda cnt=data_count:
+                                   self.logger.log_message(f"    → 총 {cnt}개 데이터 항목 추출됨"))
 
                     summary_data.append(row_data)
 
