@@ -4535,13 +4535,34 @@ class SettlementScraperTab:
     def _run_consolidated_summary(self):
         """통합자료 생성 실행"""
         try:
-            import pandas as pd
             import glob
+            import pandas as pd
 
             self.frame.after(0, lambda: self.logger.log_message("📊 엑셀 파일 수집 중..."))
 
             # 출력 디렉토리에서 모든 은행의 엑셀 파일 찾기
-            excel_files = glob.glob(os.path.join(self.config.output_dir, "*_결산공시_*.xlsx"))
+            excel_patterns = [
+                os.path.join(self.config.output_dir, "*_결산공시_*.xlsx"),
+                os.path.join(self.config.output_dir, "*_결산_*.xlsx"),
+            ]
+
+            excel_files = []
+            for pattern in excel_patterns:
+                excel_files.extend(glob.glob(pattern))
+
+            # 통합 산출물 등 불필요한 파일 제외 및 중복 제거
+            filtered_files = []
+            seen = set()
+            for file_path in excel_files:
+                file_name = os.path.basename(file_path)
+                if file_name.startswith("통합자료_"):
+                    continue
+                if file_name in seen:
+                    continue
+                seen.add(file_name)
+                filtered_files.append(file_path)
+
+            excel_files = sorted(filtered_files)
 
             if not excel_files:
                 self.frame.after(0, lambda: messagebox.showwarning("경고", "엑셀 파일을 찾을 수 없습니다.\n먼저 스크래핑을 실행해주세요."))
@@ -4556,6 +4577,12 @@ class SettlementScraperTab:
                 try:
                     # 은행명 추출 (파일명에서)
                     bank_name = os.path.basename(excel_file).split('_')[0]
+
+                    if bank_name not in self.config.BANKS:
+                        self.frame.after(0, lambda b=bank_name: self.logger.log_message(
+                            f"⚠️  통합 대상 제외: {b} (은행 목록에 없음)"
+                        ))
+                        continue
 
                     # 엑셀 파일 읽기
                     excel_data = pd.ExcelFile(excel_file)
@@ -4591,13 +4618,7 @@ class SettlementScraperTab:
             # DataFrame 생성
             df_summary = pd.DataFrame(summary_data)
 
-            # 총자산 기준으로 정렬 (내림차순)
-            if '총자산(최근분기)' in df_summary.columns:
-                df_summary = df_summary.sort_values('총자산(최근분기)', ascending=False, na_position='last')
-                # No 열 추가
-                df_summary.insert(0, 'No', range(1, len(df_summary) + 1))
-
-            # 열 순서 재정렬
+            # 필요한 열이 없을 경우를 대비하여 기본 열 추가
             column_order = [
                 'No', '은행명', '총자산(최근분기)',
                 '당기순이익(최근분기)', '당기순이익(누계)',
@@ -4605,7 +4626,20 @@ class SettlementScraperTab:
                 'BIS자기자본비율(%)', '고정이하여신비율(%)'
             ]
 
-            # 존재하는 열만 선택
+            for col in column_order:
+                if col not in df_summary.columns and col != 'No':
+                    df_summary[col] = pd.NA
+
+            # 총자산 기준으로 정렬 (내림차순), 없으면 은행명 기준
+            if '총자산(최근분기)' in df_summary.columns and df_summary['총자산(최근분기)'].notna().any():
+                df_summary = df_summary.sort_values('총자산(최근분기)', ascending=False, na_position='last')
+            else:
+                df_summary = df_summary.sort_values('은행명')
+
+            df_summary = df_summary.reset_index(drop=True)
+            df_summary.insert(0, 'No', range(1, len(df_summary) + 1))
+
+            # 열 순서 재정렬 (존재하는 열만 사용)
             existing_columns = [col for col in column_order if col in df_summary.columns]
             df_summary = df_summary[existing_columns]
 
@@ -4684,16 +4718,63 @@ class SettlementScraperTab:
             if df.empty or len(df.columns) < 2:
                 return data
 
+            # 첫 번째 열(항목명) 제외한 나머지 열 정보 수집
+            value_columns = [col for col in df.columns[1:] if str(col).strip()]
+
+            # 열 헤더에 따라 최근 분기/누계 열 추정
+            normalized_headers = {
+                col: str(col).replace('\n', '').replace(' ', '') for col in value_columns
+            }
+
+            cumulative_col = None
+            recent_col = None
+
+            for col, header in normalized_headers.items():
+                if cumulative_col is None and any(keyword in header for keyword in ['누계', '누적']):
+                    cumulative_col = col
+                if recent_col is None and (
+                    ('누계' not in header and '누적' not in header)
+                    and any(keyword in header for keyword in ['최근', '당기', '분기'])
+                ):
+                    recent_col = col
+
+            # 기본값 보강 (헤더에 정보가 없을 때)
+            if recent_col is None and value_columns:
+                recent_col = value_columns[0]
+            if cumulative_col is None and len(value_columns) >= 2:
+                cumulative_col = value_columns[1]
+
+            # 항목명 컬럼 정규화
+            item_series = df.iloc[:, 0].astype(str).str.replace('\s+', '', regex=True)
+            profit_rows = df[item_series.str.contains('당기순이익', na=False)]
+
+            if not profit_rows.empty:
+                target_row = profit_rows.iloc[0]
+
+                if recent_col is not None and recent_col in target_row:
+                    value = self._safe_convert_number(target_row[recent_col])
+                    if value is not None:
+                        data['당기순이익(최근분기)'] = value
+
+                if cumulative_col is not None and cumulative_col in target_row:
+                    value = self._safe_convert_number(target_row[cumulative_col])
+                    if value is not None:
+                        data['당기순이익(누계)'] = value
+
+            # 추가 안전장치: 행 이름에 누계 여부가 포함된 경우 처리
             for idx, row in df.iterrows():
                 item_name = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
+                if '당기순이익' not in item_name:
+                    continue
 
-                # 당기순이익 (분기)
-                if '당기순이익' in item_name and '누계' not in item_name:
-                    data['당기순이익(최근분기)'] = self._safe_convert_number(row.iloc[1])
+                value = self._safe_convert_number(row.iloc[1])
+                if value is None:
+                    continue
 
-                # 당기순이익 (누계)
-                elif '당기순이익' in item_name and '누계' in item_name:
-                    data['당기순이익(누계)'] = self._safe_convert_number(row.iloc[1])
+                if any(keyword in item_name for keyword in ['누계', '누적']):
+                    data.setdefault('당기순이익(누계)', value)
+                else:
+                    data.setdefault('당기순이익(최근분기)', value)
 
         except Exception as e:
             pass
@@ -4730,14 +4811,29 @@ class SettlementScraperTab:
             if pd.isna(value):
                 return None
 
-            # 문자열인 경우 쉼표 제거
             if isinstance(value, str):
-                value = value.replace(',', '').replace('%', '').strip()
+                cleaned = value.replace(',', '').replace('%', '').strip()
+                cleaned = cleaned.replace('−', '-')  # 특수 마이너스 문자 보정
 
-            # 숫자로 변환
+                is_negative = False
+                if cleaned.startswith('(') and cleaned.endswith(')'):
+                    cleaned = cleaned[1:-1]
+                    is_negative = True
+
+                cleaned = cleaned.replace('+', '').strip()
+                cleaned = re.sub(r'[^0-9\.-]', '', cleaned)
+
+                if cleaned in {'', '-', '.', '-.'}:
+                    return None
+
+                value = float(cleaned)
+                if is_negative:
+                    value = -value
+                return value
+
             return float(value)
 
-        except:
+        except Exception:
             return None
 
     def _create_summary_md(self, df, output_path):
