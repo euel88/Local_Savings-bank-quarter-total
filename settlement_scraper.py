@@ -3519,10 +3519,35 @@ class SettlementScraperTab:
     
     def create_widgets(self):
         """GUI 위젯을 생성합니다."""
-        # 메인 프레임 설정 - self.frame을 부모로 사용
-        self.main_frame = ttk.Frame(self.frame, padding="10")
-        self.main_frame.pack(fill=tk.BOTH, expand=True)
-        
+        # 스크롤 가능한 캔버스 생성
+        canvas = tk.Canvas(self.frame, borderwidth=0, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(self.frame, orient="vertical", command=canvas.yview)
+        self.main_frame = ttk.Frame(canvas, padding="10")
+
+        # 스크롤바 설정
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        # 레이아웃
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        canvas_frame = canvas.create_window((0, 0), window=self.main_frame, anchor="nw")
+
+        # 캔버스 크기 조정 이벤트
+        def on_frame_configure(event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def on_canvas_configure(event):
+            canvas.itemconfig(canvas_frame, width=event.width)
+
+        self.main_frame.bind("<Configure>", on_frame_configure)
+        canvas.bind("<Configure>", on_canvas_configure)
+
+        # 마우스 휠 스크롤 지원
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+
+        canvas.bind_all("<MouseWheel>", on_mousewheel)
+
         # 상단 프레임 (설정)
         self.settings_frame = ttk.LabelFrame(self.main_frame, text="설정", padding="5")
         self.settings_frame.pack(fill=tk.X, padx=5, pady=5)
@@ -3549,9 +3574,12 @@ class SettlementScraperTab:
         ttk.Checkbutton(self.settings_frame, text="스크래핑 완료 후 자동 압축", variable=self.auto_zip_var).grid(row=2, column=2, sticky=tk.W, padx=5, pady=5)
         
         # MD 생성 옵션 추가
-        ttk.Checkbutton(self.settings_frame, text="📝 MD 파일도 함께 생성", 
+        ttk.Checkbutton(self.settings_frame, text="📝 MD 파일도 함께 생성",
                        variable=self.save_md_var).grid(row=3, column=0, sticky=tk.W, padx=5, pady=5)
-        
+
+        # 설정 프레임의 column 1을 확장 가능하게 설정
+        self.settings_frame.columnconfigure(1, weight=1)
+
         # 중앙 프레임 (은행 선택)
         self.bank_frame = ttk.LabelFrame(self.main_frame, text="은행 선택", padding="5")
         self.bank_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
