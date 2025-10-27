@@ -3176,6 +3176,13 @@ class BankScraper:
 
 # GUI 클래스 (탭용으로 수정된 버전)
 class QuarterlyScraperTab:
+    _RECENT_HEADER_KEYWORDS = ['최근', '당기', '분기', '현', '현재', '기말', '말']
+    _CUMULATIVE_HEADER_KEYWORDS = ['누계', '누적', '합계']
+    _PREVIOUS_PERIOD_KEYWORDS = [
+        '전기', '전년', '이전', '직전', '전분기', '전년도', '전년동기', '전기말', '전월',
+        '증감', '증가', '감소', '변동', '차이'
+    ]
+
     def __init__(self, parent, simplified=False):
         self.parent = parent
         self.frame = ttk.Frame(parent)  # 탭용 프레임 생성
@@ -4409,38 +4416,181 @@ class QuarterlyScraperTab:
             self.frame.after(0, lambda err=str(e): messagebox.showerror("오류", f"통합자료 생성 중 오류:\n{err}"))
             self.frame.after(0, lambda err=str(e): self.logger.log_message(f"❌ 통합자료 생성 오류: {err}"))
 
+    def _prepare_summary_sheet(self, df):
+        """통합자료 추출 전에 시트 구조를 정리합니다."""
+        if df is None:
+            return pd.DataFrame()
+
+        cleaned = df.copy()
+
+        def _compose_column_name(column, position):
+            if isinstance(column, tuple):
+                parts = [str(part).strip() for part in column if part and str(part).strip() and not str(part).startswith('Unnamed')]
+                name = " ".join(parts).strip()
+            else:
+                name = str(column).strip() if column is not None else ""
+                if name.lower().startswith('unnamed'):
+                    name = ""
+
+            name = re.sub(r'\s+', ' ', name)
+            if not name:
+                return '항목' if position == 0 else f'컬럼{position}'
+            return name
+
+        cleaned.columns = [_compose_column_name(col, idx) for idx, col in enumerate(cleaned.columns)]
+
+        if not cleaned.columns.empty:
+            cleaned.rename(columns={cleaned.columns[0]: '항목'}, inplace=True)
+
+        cleaned = cleaned.dropna(how='all')
+        if cleaned.empty:
+            return cleaned
+
+        cleaned = cleaned[cleaned.iloc[:, 0].notna()]
+        if cleaned.empty:
+            return cleaned
+
+        cleaned.iloc[:, 0] = cleaned.iloc[:, 0].astype(str)
+
+        drop_labels = []
+        for idx in range(1, len(cleaned.columns)):
+            series = cleaned.iloc[:, idx]
+            if series.dropna().astype(str).str.replace('\s+', '', regex=True).replace('', pd.NA).dropna().empty:
+                drop_labels.append(cleaned.columns[idx])
+
+        if drop_labels:
+            cleaned = cleaned.drop(columns=drop_labels)
+
+        return cleaned
+
+    def _normalize_header_text(self, header):
+        """헤더 문자열을 비교 가능하도록 정규화합니다."""
+        if header is None:
+            return ""
+
+        text = str(header)
+        text = text.replace('\n', '')
+        text = re.sub(r'\s+', '', text)
+        replacements = {
+            '최근분기말': '최근분기',
+            '당기말': '당기',
+            '기말': '말',
+            '당기누계': '당기누계',
+        }
+        for src, dest in replacements.items():
+            text = text.replace(src, dest)
+
+        text = text.replace('(백만원)', '')
+        text = text.replace('(누계)', '누계')
+        text = text.replace('누계기준', '누계')
+        text = text.replace('당기말누계', '당기누계')
+        text = text.replace('당기순이익누계', '당기순이익누계')
+
+        return re.sub(r'[^0-9A-Za-z가-힣]', '', text)
+
+    def _normalize_item_text(self, text):
+        """항목명을 분석하기 쉬운 형태로 정규화합니다."""
+        if text is None:
+            return ""
+
+        normalized = str(text)
+        normalized = normalized.replace('\n', '')
+        normalized = re.sub(r'\s+', '', normalized)
+        normalized = normalized.replace('(백만원)', '')
+        return re.sub(r'[^0-9A-Za-z가-힣]', '', normalized)
+
+    def _pick_value_by_header(self, row, header_map, prefer_keywords=None, exclude_keywords=None):
+        """헤더 키워드를 기반으로 우선순위를 정해 값을 선택합니다."""
+        prefer_keywords = prefer_keywords or []
+        exclude_keywords = exclude_keywords or []
+
+        priority_indices = []
+        fallback_indices = []
+
+        for idx in range(1, len(row)):
+            header = header_map.get(idx, '')
+
+            if any(keyword in header for keyword in exclude_keywords):
+                continue
+
+            if prefer_keywords and any(keyword in header for keyword in prefer_keywords):
+                priority_indices.append(idx)
+            else:
+                fallback_indices.append(idx)
+
+        for idx in priority_indices + fallback_indices:
+            value = self._safe_convert_number(row.iloc[idx])
+            if value is not None:
+                return value
+
+        return None
+
     def _extract_business_summary(self, df):
         """영업개황 시트에서 요약 데이터 추출"""
         data = {}
 
         try:
-            # DataFrame이 비어있지 않은지 확인
-            if df.empty:
+            df = self._prepare_summary_sheet(df)
+
+            if df.empty or len(df.columns) < 2:
                 return data
 
-            # 첫 번째 열을 항목명으로 사용
-            if len(df.columns) < 2:
-                return data
+            header_map = {idx: self._normalize_header_text(col) for idx, col in enumerate(df.columns)}
 
-            # 데이터 추출 (가장 최근 분기는 보통 두 번째 열)
             for idx, row in df.iterrows():
-                item_name = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
+                item_name = self._normalize_item_text(row.iloc[0])
 
                 # 총자산
-                if '총자산' in item_name or '총 자산' in item_name:
-                    data['총자산(최근분기)'] = self._safe_convert_number(row.iloc[1])
+                if '총자산' in item_name:
+                    value = self._pick_value_by_header(
+                        row,
+                        header_map,
+                        prefer_keywords=self._RECENT_HEADER_KEYWORDS,
+                        exclude_keywords=self._PREVIOUS_PERIOD_KEYWORDS + self._CUMULATIVE_HEADER_KEYWORDS
+                    )
+                    if value is None:
+                        value = self._pick_value_by_header(row, header_map)
+                    if value is not None:
+                        data['총자산(최근분기)'] = value
 
                 # 자기자본
                 elif '자기자본' in item_name:
-                    data['자기자본(최근분기)'] = self._safe_convert_number(row.iloc[1])
+                    value = self._pick_value_by_header(
+                        row,
+                        header_map,
+                        prefer_keywords=self._RECENT_HEADER_KEYWORDS,
+                        exclude_keywords=self._PREVIOUS_PERIOD_KEYWORDS + self._CUMULATIVE_HEADER_KEYWORDS
+                    )
+                    if value is None:
+                        value = self._pick_value_by_header(row, header_map)
+                    if value is not None:
+                        data['자기자본(최근분기)'] = value
 
                 # 총여신
-                elif '총여신' in item_name or '총 여신' in item_name:
-                    data['총여신(최근분기)'] = self._safe_convert_number(row.iloc[1])
+                elif '총여신' in item_name:
+                    value = self._pick_value_by_header(
+                        row,
+                        header_map,
+                        prefer_keywords=self._RECENT_HEADER_KEYWORDS,
+                        exclude_keywords=self._PREVIOUS_PERIOD_KEYWORDS + self._CUMULATIVE_HEADER_KEYWORDS
+                    )
+                    if value is None:
+                        value = self._pick_value_by_header(row, header_map)
+                    if value is not None:
+                        data['총여신(최근분기)'] = value
 
                 # 총수신
-                elif '총수신' in item_name or '총 수신' in item_name:
-                    data['총수신(최근분기)'] = self._safe_convert_number(row.iloc[1])
+                elif '총수신' in item_name:
+                    value = self._pick_value_by_header(
+                        row,
+                        header_map,
+                        prefer_keywords=self._RECENT_HEADER_KEYWORDS,
+                        exclude_keywords=self._PREVIOUS_PERIOD_KEYWORDS + self._CUMULATIVE_HEADER_KEYWORDS
+                    )
+                    if value is None:
+                        value = self._pick_value_by_header(row, header_map)
+                    if value is not None:
+                        data['총수신(최근분기)'] = value
 
         except Exception as e:
             pass
@@ -4452,19 +4602,66 @@ class QuarterlyScraperTab:
         data = {}
 
         try:
+            df = self._prepare_summary_sheet(df)
+
             if df.empty or len(df.columns) < 2:
                 return data
 
+            header_map = {idx: self._normalize_header_text(col) for idx, col in enumerate(df.columns)}
+
+            item_series = df.iloc[:, 0].apply(self._normalize_item_text)
+
             for idx, row in df.iterrows():
-                item_name = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
+                normalized_name = item_series.iloc[idx]
+                if '당기순이익' not in normalized_name:
+                    continue
 
-                # 당기순이익 (분기)
-                if '당기순이익' in item_name and '누계' not in item_name:
-                    data['당기순이익(최근분기)'] = self._safe_convert_number(row.iloc[1])
+                row_is_cumulative = any(keyword in normalized_name for keyword in ['누계', '누적', '합계'])
 
-                # 당기순이익 (누계)
-                elif '당기순이익' in item_name and '누계' in item_name:
-                    data['당기순이익(누계)'] = self._safe_convert_number(row.iloc[1])
+                if not row_is_cumulative:
+                    recent_value = self._pick_value_by_header(
+                        row,
+                        header_map,
+                        prefer_keywords=self._RECENT_HEADER_KEYWORDS,
+                        exclude_keywords=self._PREVIOUS_PERIOD_KEYWORDS + self._CUMULATIVE_HEADER_KEYWORDS
+                    )
+                    if recent_value is None:
+                        recent_value = self._pick_value_by_header(
+                            row,
+                            header_map,
+                            exclude_keywords=self._PREVIOUS_PERIOD_KEYWORDS
+                        )
+                    if recent_value is not None:
+                        data.setdefault('당기순이익(최근분기)', recent_value)
+
+                cumulative_value = self._pick_value_by_header(
+                    row,
+                    header_map,
+                    prefer_keywords=self._CUMULATIVE_HEADER_KEYWORDS,
+                    exclude_keywords=self._PREVIOUS_PERIOD_KEYWORDS
+                )
+
+                if cumulative_value is None and row_is_cumulative:
+                    cumulative_value = self._pick_value_by_header(
+                        row,
+                        header_map,
+                        exclude_keywords=self._PREVIOUS_PERIOD_KEYWORDS
+                    )
+
+                if cumulative_value is not None:
+                    data.setdefault('당기순이익(누계)', cumulative_value)
+
+            if '당기순이익(최근분기)' not in data and '당기순이익(누계)' in data:
+                fallback_row = df[item_series.str.contains('당기순이익', na=False)]
+                if not fallback_row.empty:
+                    row = fallback_row.iloc[0]
+                    fallback_value = self._pick_value_by_header(
+                        row,
+                        header_map,
+                        exclude_keywords=self._PREVIOUS_PERIOD_KEYWORDS + self._CUMULATIVE_HEADER_KEYWORDS
+                    )
+                    if fallback_value is not None:
+                        data['당기순이익(최근분기)'] = fallback_value
 
         except Exception as e:
             pass
@@ -4476,19 +4673,41 @@ class QuarterlyScraperTab:
         data = {}
 
         try:
+            df = self._prepare_summary_sheet(df)
+
             if df.empty or len(df.columns) < 2:
                 return data
 
+            header_map = {idx: self._normalize_header_text(col) for idx, col in enumerate(df.columns)}
+
             for idx, row in df.iterrows():
-                item_name = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
+                item_name = self._normalize_item_text(row.iloc[0])
 
                 # BIS 자기자본비율
                 if 'BIS' in item_name and '자기자본' in item_name and '비율' in item_name:
-                    data['BIS자기자본비율(%)'] = self._safe_convert_number(row.iloc[1])
+                    value = self._pick_value_by_header(
+                        row,
+                        header_map,
+                        prefer_keywords=self._RECENT_HEADER_KEYWORDS,
+                        exclude_keywords=self._PREVIOUS_PERIOD_KEYWORDS
+                    )
+                    if value is None:
+                        value = self._pick_value_by_header(row, header_map)
+                    if value is not None:
+                        data['BIS자기자본비율(%)'] = value
 
                 # 고정이하여신비율
                 elif '고정이하' in item_name and '여신' in item_name and '비율' in item_name:
-                    data['고정이하여신비율(%)'] = self._safe_convert_number(row.iloc[1])
+                    value = self._pick_value_by_header(
+                        row,
+                        header_map,
+                        prefer_keywords=self._RECENT_HEADER_KEYWORDS,
+                        exclude_keywords=self._PREVIOUS_PERIOD_KEYWORDS
+                    )
+                    if value is None:
+                        value = self._pick_value_by_header(row, header_map)
+                    if value is not None:
+                        data['고정이하여신비율(%)'] = value
 
         except Exception as e:
             pass
@@ -4501,14 +4720,33 @@ class QuarterlyScraperTab:
             if pd.isna(value):
                 return None
 
-            # 문자열인 경우 쉼표 제거
             if isinstance(value, str):
-                value = value.replace(',', '').replace('%', '').strip()
+                cleaned = value.replace(',', '').replace('%', '').strip()
+                cleaned = cleaned.replace('−', '-')
+                cleaned = cleaned.replace('–', '-')
+                cleaned = cleaned.replace('―', '-')
+                cleaned = cleaned.replace('—', '-')
+                cleaned = cleaned.replace('△', '-').replace('▲', '-').replace('▴', '-').replace('▵', '-')
 
-            # 숫자로 변환
+                is_negative = False
+                if cleaned.startswith('(') and cleaned.endswith(')'):
+                    cleaned = cleaned[1:-1]
+                    is_negative = True
+
+                cleaned = cleaned.replace('+', '').strip()
+                cleaned = re.sub(r'[^0-9\.-]', '', cleaned)
+
+                if cleaned in {'', '-', '.', '-.'}:
+                    return None
+
+                value = float(cleaned)
+                if is_negative:
+                    value = -value
+                return value
+
             return float(value)
 
-        except:
+        except Exception:
             return None
 
     def _create_summary_md(self, df, output_path):
