@@ -1,6 +1,6 @@
 """
 저축은행 중앙회 통일경영공시 데이터 스크래핑 핵심 로직
-Streamlit 웹 앱용 모듈
+Streamlit 웹 앱용 모듈 v3.1
 """
 
 import os
@@ -44,7 +44,7 @@ def suppress_stderr():
 
 class Config:
     """프로그램 설정을 관리하는 클래스"""
-    VERSION = "3.0-streamlit"
+    VERSION = "3.1-streamlit"
     QUARTERLY_URL = "https://www.fsb.or.kr/busmagequar_0100.act"  # 분기공시 URL
     SETTLEMENT_URL = "https://www.fsb.or.kr/busmagesett_0100.act"  # 결산공시 URL
     MAX_RETRIES = 2
@@ -202,12 +202,16 @@ class BankScraper:
             if current_period_elements:
                 for element in current_period_elements:
                     text = element.text
-                    date_pattern = re.compile(r'\d{4}년\d{1,2}월말?')
+                    date_pattern = re.compile(r'\d{4}년\s*\d{1,2}월\s*말?')
                     matches = date_pattern.findall(text)
 
                     if matches:
-                        latest_date = max(matches, key=lambda x: int(x[:4]))
-                        return latest_date
+                        latest_date = max(matches, key=lambda x: int(re.search(r'\d{4}', x).group()))
+                        # 날짜 형식 정리 (예: "2025년 9월말")
+                        cleaned_date = re.sub(r'\s+', '', latest_date)
+                        if not cleaned_date.endswith('말'):
+                            cleaned_date += '말'
+                        return cleaned_date
 
             # 모든 날짜 찾기
             all_date_elements = driver.find_elements(
@@ -218,14 +222,17 @@ class BankScraper:
             all_dates = []
             for element in all_date_elements:
                 text = element.text
-                date_pattern = re.compile(r'\d{4}년\d{1,2}월말?')
+                date_pattern = re.compile(r'\d{4}년\s*\d{1,2}월\s*말?')
                 matches = date_pattern.findall(text)
                 all_dates.extend(matches)
 
             if all_dates:
                 unique_dates = list(set(all_dates))
-                sorted_dates = sorted(unique_dates, key=lambda x: int(x[:4]), reverse=True)
-                return sorted_dates[0]
+                sorted_dates = sorted(unique_dates, key=lambda x: int(re.search(r'\d{4}', x).group()), reverse=True)
+                cleaned_date = re.sub(r'\s+', '', sorted_dates[0])
+                if not cleaned_date.endswith('말'):
+                    cleaned_date += '말'
+                return cleaned_date
 
             return "날짜 정보 없음"
 
@@ -377,18 +384,20 @@ class BankScraper:
             return []
 
     def scrape_bank(self, bank_name, progress_callback=None):
-        """단일 은행 데이터 스크래핑"""
+        """단일 은행 데이터 스크래핑 - 날짜 정보도 반환"""
         driver = None
+        date_info = "날짜 정보 없음"
+
         try:
             driver = create_driver()
             self.logger.log_message(f"[시작] {bank_name} 은행 스크래핑")
 
             if not self.select_bank(driver, bank_name):
                 self.logger.log_message(f"{bank_name} 선택 실패")
-                return None, False
+                return None, False, date_info
 
             date_info = self.extract_date_information(driver)
-            self.logger.log_message(f"{bank_name} 날짜: {date_info}")
+            self.logger.log_message(f"{bank_name} 공시일: {date_info}")
 
             result_data = {'날짜정보': date_info}
 
@@ -405,12 +414,18 @@ class BankScraper:
             # Excel 파일 저장
             if len(result_data) > 1:
                 scrape_type_name = "분기공시" if self.config.scrape_type == "quarterly" else "결산공시"
-                filename = f"{bank_name}_{scrape_type_name}_{date_info.replace('/', '_')}.xlsx"
+                # 파일명에 날짜 정보 포함
+                safe_date = date_info.replace('/', '_').replace(' ', '')
+                filename = f"{bank_name}_{scrape_type_name}_{safe_date}.xlsx"
                 filepath = os.path.join(self.config.output_dir, filename)
 
                 with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
                     # 날짜 정보 시트
-                    pd.DataFrame({'날짜정보': [date_info]}).to_excel(writer, sheet_name='날짜정보', index=False)
+                    pd.DataFrame({
+                        '은행명': [bank_name],
+                        '공시일': [date_info],
+                        '스크래핑일시': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')]
+                    }).to_excel(writer, sheet_name='정보', index=False)
 
                     for category, tables in result_data.items():
                         if category == '날짜정보':
@@ -420,14 +435,14 @@ class BankScraper:
                             sheet_name = sheet_name[:31]  # Excel 시트명 길이 제한
                             df.to_excel(writer, sheet_name=sheet_name, index=False)
 
-                self.logger.log_message(f"[완료] {bank_name} 저장: {filename}")
-                return filepath, True
+                self.logger.log_message(f"[완료] {bank_name} 저장완료")
+                return filepath, True, date_info
 
-            return None, False
+            return None, False, date_info
 
         except Exception as e:
             self.logger.log_message(f"{bank_name} 스크래핑 오류: {str(e)}")
-            return None, False
+            return None, False, date_info
         finally:
             if driver:
                 try:
@@ -444,11 +459,12 @@ class BankScraper:
             if progress_callback:
                 progress_callback(bank, f"처리 중 ({idx+1}/{total})")
 
-            filepath, success = self.scrape_bank(bank, progress_callback)
+            filepath, success, date_info = self.scrape_bank(bank, progress_callback)
             results.append({
                 'bank': bank,
                 'success': success,
-                'filepath': filepath
+                'filepath': filepath,
+                'date_info': date_info
             })
 
             if progress_callback:
@@ -460,14 +476,19 @@ class BankScraper:
 
         return results
 
-    def create_zip_archive(self, results):
+    def create_zip_archive(self, results, custom_filename=None):
         """결과 파일들을 ZIP으로 압축"""
         successful_files = [r['filepath'] for r in results if r['success'] and r['filepath']]
 
         if not successful_files:
             return None
 
-        zip_filename = f"저축은행_{self.config.scrape_type}_{self.config.today}.zip"
+        # 파일명 설정
+        if custom_filename:
+            zip_filename = f"{custom_filename}.zip"
+        else:
+            zip_filename = f"저축은행_{self.config.scrape_type}_{self.config.today}.zip"
+
         zip_path = os.path.join(self.config.output_dir, zip_filename)
 
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
@@ -475,17 +496,29 @@ class BankScraper:
                 if os.path.exists(filepath):
                     zipf.write(filepath, os.path.basename(filepath))
 
+            # 통합 요약 파일 생성
+            summary_df = create_summary_dataframe(results)
+            summary_path = os.path.join(self.config.output_dir, "스크래핑_요약.xlsx")
+            summary_df.to_excel(summary_path, index=False)
+            zipf.write(summary_path, "스크래핑_요약.xlsx")
+
         return zip_path
 
 
-def create_summary_dataframe(results):
-    """스크래핑 결과 요약 DataFrame 생성"""
+def create_summary_dataframe(results, bank_dates=None):
+    """스크래핑 결과 요약 DataFrame 생성 - 공시날짜 포함"""
     summary_data = []
     for r in results:
+        # 날짜 정보 가져오기
+        date_info = r.get('date_info', '')
+        if not date_info and bank_dates:
+            date_info = bank_dates.get(r['bank'], '')
+
         summary_data.append({
             '은행명': r['bank'],
-            '상태': '성공' if r['success'] else '실패',
-            '파일': os.path.basename(r['filepath']) if r['filepath'] else '-'
+            '공시날짜': date_info if date_info else '-',
+            '상태': '✅ 성공' if r['success'] else '❌ 실패',
+            '파일명': os.path.basename(r['filepath']) if r['filepath'] else '-'
         })
 
     return pd.DataFrame(summary_data)
