@@ -206,6 +206,7 @@ def main():
             value=f"저축은행_{scrape_type}_{datetime.now().strftime('%Y%m%d')}",
             help="다운로드할 ZIP 파일의 이름을 지정하세요"
         )
+        st.caption("💡 파일은 브라우저 다운로드 폴더에 저장됩니다")
 
     with col3:
         auto_zip = st.checkbox("🗜️ 완료 후 자동 압축", value=True)
@@ -220,12 +221,18 @@ def main():
     col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 1])
     with col2:
         if st.button("✅ 전체 선택", use_container_width=True, type="primary"):
+            # 모든 은행 체크박스 상태를 True로 설정
+            for bank in all_banks:
+                st.session_state[f"bank_{bank}"] = True
             st.session_state.selected_banks = all_banks.copy()
             st.rerun()
     with col3:
         st.metric("선택된 은행", f"{len(st.session_state.selected_banks)}개 / 79개")
     with col4:
         if st.button("❌ 전체 해제", use_container_width=True):
+            # 모든 은행 체크박스 상태를 False로 설정
+            for bank in all_banks:
+                st.session_state[f"bank_{bank}"] = False
             st.session_state.selected_banks = []
             st.rerun()
 
@@ -238,22 +245,21 @@ def main():
     cols_per_row = 8
     rows = [all_banks[i:i + cols_per_row] for i in range(0, len(all_banks), cols_per_row)]
 
-    selected_banks_temp = st.session_state.selected_banks.copy()
+    # 체크박스 초기값 설정 (session_state에 없으면 False)
+    for bank in all_banks:
+        if f"bank_{bank}" not in st.session_state:
+            st.session_state[f"bank_{bank}"] = bank in st.session_state.selected_banks
 
     for row in rows:
         cols = st.columns(cols_per_row)
         for idx, bank in enumerate(row):
             with cols[idx]:
-                checked = bank in selected_banks_temp
-                if st.checkbox(bank, value=checked, key=f"bank_{bank}"):
-                    if bank not in selected_banks_temp:
-                        selected_banks_temp.append(bank)
-                else:
-                    if bank in selected_banks_temp:
-                        selected_banks_temp.remove(bank)
+                # 체크박스 상태를 session_state에서 직접 관리
+                st.checkbox(bank, key=f"bank_{bank}")
 
-    st.session_state.selected_banks = selected_banks_temp
-    selected_banks = st.session_state.selected_banks
+    # 체크박스 상태에서 선택된 은행 목록 업데이트
+    selected_banks = [bank for bank in all_banks if st.session_state.get(f"bank_{bank}", False)]
+    st.session_state.selected_banks = selected_banks
 
     st.divider()
 
