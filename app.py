@@ -1,6 +1,7 @@
 """
 저축은행 중앙회 통일경영공시 데이터 스크래퍼
-Streamlit 웹 앱 버전 v3.1
+Streamlit 웹 앱 버전 v3.2
+- ChatGPT API를 활용한 엑셀 생성 기능 추가
 """
 
 import streamlit as st
@@ -8,6 +9,19 @@ import pandas as pd
 import os
 import time
 from datetime import datetime
+
+# 엑셀 생성 모듈 임포트
+try:
+    from excel_generator import (
+        ChatGPTExcelGenerator,
+        DirectExcelGenerator,
+        generate_excel_with_chatgpt,
+        OPENAI_AVAILABLE
+    )
+    EXCEL_GENERATOR_AVAILABLE = True
+except ImportError:
+    EXCEL_GENERATOR_AVAILABLE = False
+    OPENAI_AVAILABLE = False
 
 # 페이지 설정
 st.set_page_config(
@@ -170,6 +184,10 @@ def init_session_state():
         st.session_state.elapsed_time = 0
     if 'bank_dates' not in st.session_state:
         st.session_state.bank_dates = {}
+    if 'openai_api_key' not in st.session_state:
+        st.session_state.openai_api_key = ""
+    if 'summary_excel_path' not in st.session_state:
+        st.session_state.summary_excel_path = None
 
 
 def main():
@@ -211,6 +229,38 @@ def main():
     with col3:
         auto_zip = st.checkbox("🗜️ 완료 후 자동 압축", value=True)
         save_md = st.checkbox("📝 MD 파일도 함께 생성", value=False)
+
+    st.divider()
+
+    # ========== ChatGPT API 설정 섹션 ==========
+    st.markdown('<div class="section-title">🤖 ChatGPT API 설정 (엑셀 자동 생성)</div>', unsafe_allow_html=True)
+
+    if EXCEL_GENERATOR_AVAILABLE and OPENAI_AVAILABLE:
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            api_key = st.text_input(
+                "🔑 OpenAI API Key",
+                type="password",
+                value=st.session_state.openai_api_key,
+                help="ChatGPT API를 사용하여 수집된 데이터를 분석하고 엑셀을 생성합니다."
+            )
+            st.session_state.openai_api_key = api_key
+
+        with col2:
+            use_chatgpt = st.checkbox(
+                "🤖 ChatGPT로 엑셀 생성",
+                value=bool(st.session_state.openai_api_key),
+                disabled=not st.session_state.openai_api_key,
+                help="활성화하면 AI가 데이터를 분석하여 요약 엑셀을 생성합니다."
+            )
+
+        if st.session_state.openai_api_key:
+            st.success("✅ API Key가 설정되었습니다. 스크래핑 완료 후 AI가 엑셀을 생성합니다.")
+        else:
+            st.info("💡 OpenAI API Key를 입력하면 ChatGPT가 데이터를 분석하여 분기총괄 엑셀을 자동으로 생성합니다.")
+    else:
+        use_chatgpt = False
+        st.warning("⚠️ ChatGPT 기능을 사용하려면 openai 패키지가 필요합니다: `pip install openai`")
 
     st.divider()
 
@@ -291,7 +341,14 @@ def main():
             if not selected_banks:
                 st.error("스크래핑할 은행을 선택하세요.")
             else:
-                run_scraping(selected_banks, scrape_type, auto_zip, download_filename)
+                run_scraping(
+                    selected_banks,
+                    scrape_type,
+                    auto_zip,
+                    download_filename,
+                    use_chatgpt=use_chatgpt if 'use_chatgpt' in dir() else False,
+                    api_key=st.session_state.openai_api_key
+                )
 
     if st.session_state.scraping_running:
         st.info("⏳ 스크래핑이 진행 중입니다. 잠시만 기다려주세요...")
@@ -325,7 +382,26 @@ def main():
 
         # 다운로드 버튼
         st.write("")
+
+        # ChatGPT 생성 엑셀 다운로드
+        if 'summary_excel_path' in st.session_state and st.session_state.summary_excel_path:
+            st.markdown("#### 🤖 AI 생성 분기총괄 엑셀")
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                with open(st.session_state.summary_excel_path, 'rb') as f:
+                    st.download_button(
+                        label="📊 분기총괄 엑셀 다운로드",
+                        data=f,
+                        file_name=f"저축은행_분기총괄_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                        type="secondary"
+                    )
+            st.write("")
+
+        # ZIP 파일 다운로드
         if 'zip_path' in st.session_state and st.session_state.zip_path:
+            st.markdown("#### 📦 전체 데이터 압축 파일")
             col1, col2, col3 = st.columns([1, 2, 1])
             with col2:
                 with open(st.session_state.zip_path, 'rb') as f:
@@ -377,12 +453,13 @@ def main():
         """)
 
 
-def run_scraping(selected_banks, scrape_type, auto_zip, download_filename):
+def run_scraping(selected_banks, scrape_type, auto_zip, download_filename, use_chatgpt=False, api_key=None):
     """스크래핑 실행"""
     st.session_state.scraping_running = True
     st.session_state.results = []
     st.session_state.logs = []
     st.session_state.bank_dates = {}
+    st.session_state.summary_excel_path = None
 
     start_time = time.time()
 
@@ -454,13 +531,34 @@ def run_scraping(selected_banks, scrape_type, auto_zip, download_filename):
                 st.session_state.zip_path = zip_path
                 logger.log_message(f"ZIP 파일 생성 완료")
 
+        # ChatGPT로 분기총괄 엑셀 생성
+        if use_chatgpt and api_key and EXCEL_GENERATOR_AVAILABLE:
+            status_text.markdown("**🤖 AI가 분기총괄 엑셀 생성 중...**")
+            logger.log_message("ChatGPT API로 분기총괄 엑셀 생성 시작")
+
+            try:
+                summary_excel_path = generate_excel_with_chatgpt(
+                    scraped_results=results,
+                    api_key=api_key,
+                    use_ai=True
+                )
+                if summary_excel_path:
+                    st.session_state.summary_excel_path = summary_excel_path
+                    logger.log_message(f"AI 분기총괄 엑셀 생성 완료")
+            except Exception as e:
+                logger.log_message(f"AI 엑셀 생성 오류: {str(e)}")
+                st.warning(f"⚠️ AI 엑셀 생성 중 오류 발생: {str(e)}")
+
         # 완료
         progress_bar.progress(1.0)
         success_count = sum(1 for r in results if r['success'])
         status_text.markdown(f"**✅ 완료!** 성공: {success_count}/{total_banks}")
         elapsed_text.markdown(f"⏱️ 총 소요 시간: **{format_elapsed_time(final_elapsed)}**")
 
-        st.success(f"🎉 스크래핑 완료! 성공: {success_count}개, 실패: {total_banks - success_count}개, 소요시간: {format_elapsed_time(final_elapsed)}")
+        completion_msg = f"🎉 스크래핑 완료! 성공: {success_count}개, 실패: {total_banks - success_count}개, 소요시간: {format_elapsed_time(final_elapsed)}"
+        if st.session_state.summary_excel_path:
+            completion_msg += " | 🤖 AI 엑셀 생성 완료"
+        st.success(completion_msg)
         st.session_state.logs = logger.messages.copy()
 
     except Exception as e:
