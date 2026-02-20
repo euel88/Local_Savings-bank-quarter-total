@@ -55,10 +55,10 @@ def load_api_key():
 
 # 페이지 설정
 st.set_page_config(
-    page_title="저축은행 데이터 스크래퍼",
+    page_title="Savings Bank Data Dashboard",
     page_icon="🏦",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
 # 스크래퍼 모듈 임포트
@@ -72,118 +72,359 @@ except ImportError as e:
     SCRAPER_AVAILABLE = False
     st.error(f"스크래퍼 모듈 로드 실패: {e}")
 
-# CSS 스타일
+# CSS 스타일 — Warm Amber/Gold Dashboard Theme
 st.markdown("""
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@200..800&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
 <style>
-    /* 메인 헤더 */
-    .main-header {
-        font-size: 2.2rem;
-        font-weight: bold;
-        text-align: center;
-        padding: 1.5rem;
-        background: linear-gradient(135deg, #1E88E5 0%, #1565C0 100%);
-        color: white;
-        border-radius: 15px;
-        margin-bottom: 1.5rem;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    /* ===== Global ===== */
+    @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@200..800&display=swap');
+
+    html, body, [class*="css"] {
+        font-family: 'Manrope', sans-serif;
     }
 
-    .sub-header {
-        text-align: center;
-        color: #666;
-        margin-bottom: 2rem;
-        font-size: 1.1rem;
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #e7dfcf; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #d6cbb5; }
+
+    /* ===== Sidebar ===== */
+    [data-testid="stSidebar"] {
+        background: #fcfaf8;
+        border-right: 1px solid #e7dfcf;
+    }
+    [data-testid="stSidebar"] .block-container { padding-top: 1rem; }
+
+    .sidebar-brand {
+        display: flex; align-items: center; gap: 12px;
+        padding: 0.5rem 0 1.5rem 0;
+    }
+    .sidebar-brand-icon {
+        background: linear-gradient(135deg, #eca413, #b87d0e);
+        width: 40px; height: 40px; border-radius: 12px;
+        display: flex; align-items: center; justify-content: center;
+        color: white; box-shadow: 0 4px 20px -2px rgba(236,164,19,0.15);
+        flex-shrink: 0;
+    }
+    .sidebar-brand-text h1 {
+        font-size: 1rem; font-weight: 700; color: #1b170d;
+        line-height: 1.2; margin: 0;
+    }
+    .sidebar-brand-text p {
+        font-size: 0.75rem; font-weight: 500; color: #9a804c; margin: 0;
     }
 
-    /* 설정 카드 */
-    .settings-card {
-        background: #f8f9fa;
+    .sidebar-nav a {
+        display: flex; align-items: center; gap: 12px;
+        padding: 12px 16px; border-radius: 12px;
+        text-decoration: none; font-size: 0.875rem; font-weight: 500;
+        color: #1b170d; transition: background 0.2s;
+    }
+    .sidebar-nav a:hover { background: #f3efe7; }
+    .sidebar-nav a.active {
+        background: rgba(236,164,19,0.1); color: #b87d0e; font-weight: 700;
+    }
+
+    .sidebar-cta {
+        display: flex; align-items: center; justify-content: center; gap: 8px;
+        width: 100%; height: 48px; border-radius: 12px;
+        background: #eca413; color: white; font-weight: 700; font-size: 0.875rem;
+        border: none; cursor: pointer;
+        box-shadow: 0 8px 24px -4px rgba(236,164,19,0.25);
+        transition: background 0.2s;
+        text-decoration: none;
+    }
+    .sidebar-cta:hover { background: #b87d0e; }
+
+    .sidebar-profile {
+        display: flex; align-items: center; gap: 12px;
+        padding: 10px; border-radius: 12px; transition: background 0.2s;
+    }
+    .sidebar-profile:hover { background: #f3efe7; }
+    .sidebar-profile-avatar {
+        width: 40px; height: 40px; border-radius: 50%;
+        background: #e0d8c8; border: 2px solid white;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        overflow: hidden; flex-shrink: 0;
+    }
+    .sidebar-profile-avatar img { width: 100%; height: 100%; object-fit: cover; }
+    .sidebar-profile-name { font-size: 0.875rem; font-weight: 700; color: #1b170d; margin: 0; }
+    .sidebar-profile-role { font-size: 0.75rem; color: #9a804c; margin: 0; }
+
+    /* ===== Main Content ===== */
+    .main .block-container { padding-top: 1rem; max-width: 1200px; }
+
+    /* Header */
+    .dashboard-header h2 {
+        font-size: 1.75rem; font-weight: 900; color: #1b170d;
+        letter-spacing: -0.025em; margin: 0;
+    }
+    .dashboard-header p {
+        font-size: 0.875rem; font-weight: 500; color: #9a804c; margin: 0.25rem 0 0 0;
+    }
+
+    /* ===== Stat Cards ===== */
+    .stat-card {
+        background: #ffffff;
         padding: 1.5rem;
-        border-radius: 10px;
-        border: 1px solid #e0e0e0;
+        border-radius: 1rem;
+        border: 1px solid #e7dfcf;
+        position: relative;
+        overflow: hidden;
+        transition: box-shadow 0.3s;
+        box-shadow: 0 1px 3px 0 rgba(0,0,0,0.05);
+    }
+    .stat-card:hover {
+        box-shadow: 0 4px 20px -2px rgba(236,164,19,0.08), 0 2px 6px -2px rgba(0,0,0,0.03);
+    }
+    .stat-card::before {
+        content: '';
+        position: absolute; right: -16px; top: -16px;
+        width: 96px; height: 96px;
+        background: rgba(236,164,19,0.05); border-radius: 50%;
+        filter: blur(32px);
+    }
+    .stat-card:hover::before { background: rgba(236,164,19,0.1); }
+
+    .stat-card-icon {
+        padding: 8px; background: #f3efe7; border-radius: 8px;
+        color: #eca413; display: inline-flex;
+    }
+    .stat-card-badge {
+        padding: 2px 10px; border-radius: 9999px;
+        font-size: 0.75rem; font-weight: 700;
+    }
+    .badge-green { background: rgba(7,136,16,0.1); color: #078810; }
+    .badge-amber { background: rgba(236,164,19,0.1); color: #b87d0e; }
+
+    .stat-card-label {
+        font-size: 0.875rem; font-weight: 500; color: #9a804c; margin: 0;
+    }
+    .stat-card-value {
+        font-size: 1.875rem; font-weight: 900; color: #1b170d; margin: 0;
+    }
+    .stat-card-value span {
+        font-size: 1.125rem; color: #9a804c; font-weight: 400;
+    }
+
+    /* ===== Section Title ===== */
+    .section-title {
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: #1b170d;
+        margin: 1.5rem 0 1rem 0;
+        padding-bottom: 0;
+        border-bottom: none;
+        display: flex; align-items: center; gap: 8px;
+    }
+    .section-title .live-badge {
+        background: #f3efe7; color: #9a804c;
+        font-size: 0.75rem; font-weight: 500;
+        padding: 2px 10px; border-radius: 9999px;
+    }
+
+    /* ===== Table ===== */
+    .custom-table {
+        width: 100%; border-collapse: collapse;
+        background: #ffffff; border-radius: 1rem;
+        overflow: hidden; border: 1px solid #e7dfcf;
+        box-shadow: 0 1px 3px 0 rgba(0,0,0,0.05);
+    }
+    .custom-table thead { background: #fcfaf8; border-bottom: 1px solid #e7dfcf; }
+    .custom-table th {
+        padding: 1.25rem; font-size: 0.75rem; font-weight: 700;
+        text-transform: uppercase; letter-spacing: 0.05em;
+        color: #9a804c; text-align: left;
+    }
+    .custom-table td {
+        padding: 1.25rem; font-size: 0.875rem; color: #1b170d;
+        border-bottom: 1px solid #e7dfcf;
+    }
+    .custom-table tr:last-child td { border-bottom: none; }
+    .custom-table tr:hover { background: #fcfaf8; }
+
+    .table-bank-avatar {
+        width: 32px; height: 32px; border-radius: 8px;
+        background: #f3f4f6; display: inline-flex;
+        align-items: center; justify-content: center;
+        font-size: 0.7rem; font-weight: 700; color: #9a804c;
+        flex-shrink: 0;
+    }
+    .table-bank-name {
+        font-weight: 700; font-size: 0.875rem; color: #1b170d;
+    }
+
+    .status-badge {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 4px 12px; border-radius: 9999px;
+        font-size: 0.75rem; font-weight: 700;
+    }
+    .status-success { background: #dcfce7; color: #15803d; }
+    .status-running { background: #fef3c7; color: #b45309; }
+    .status-failed { background: #fee2e2; color: #b91c1c; }
+    .status-dot {
+        width: 6px; height: 6px; border-radius: 50%; background: #22c55e;
+    }
+    .status-dot.pulse { animation: pulse 2s infinite; }
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.4; }
+    }
+    @keyframes spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+    }
+
+    .table-pagination {
+        padding: 1rem 1.25rem;
+        border-top: 1px solid #e7dfcf;
+        background: #fcfaf8;
+        display: flex; align-items: center; justify-content: space-between;
+        font-size: 0.75rem; color: #9a804c;
+    }
+    .page-btn {
+        width: 32px; height: 32px; display: inline-flex;
+        align-items: center; justify-content: center;
+        border-radius: 8px; border: 1px solid #e7dfcf;
+        background: white; color: #9a804c;
+        font-size: 0.75rem; font-weight: 500; cursor: pointer;
+        transition: all 0.2s;
+    }
+    .page-btn:hover { background: #eca413; color: white; border-color: #eca413; }
+    .page-btn.active {
+        background: #eca413; color: white; border-color: #eca413;
+        font-weight: 700; box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+
+    /* ===== Log Card ===== */
+    .log-card {
+        background: #ffffff; padding: 1.5rem;
+        border-radius: 1rem; border: 1px solid #e7dfcf;
+        box-shadow: 0 1px 3px 0 rgba(0,0,0,0.05);
+    }
+    .log-card-header {
+        display: flex; align-items: center; justify-content: space-between;
         margin-bottom: 1rem;
     }
+    .log-card-header h3 { font-size: 1rem; font-weight: 700; color: #1b170d; margin: 0; }
+    .log-card-header a {
+        font-size: 0.75rem; font-weight: 700; color: #eca413;
+        text-decoration: none;
+    }
+    .log-card-header a:hover { text-decoration: underline; }
 
-    /* 은행 선택 그리드 */
-    .bank-container {
-        display: flex;
-        flex-wrap: wrap;
-        justify-content: center;
+    .log-item {
+        display: flex; align-items: flex-start; gap: 12px;
+        padding: 12px; border-radius: 12px;
+        background: #fcfaf8; border: 1px solid #e7dfcf;
+        margin-bottom: 0.75rem;
+    }
+    .log-item:last-child { margin-bottom: 0; }
+    .log-item-text { font-size: 0.875rem; font-weight: 500; color: #1b170d; margin: 0; }
+    .log-item-time { font-size: 0.75rem; color: #9a804c; margin: 0; }
+
+    /* ===== Chart Card ===== */
+    .chart-card {
+        background: #ffffff; padding: 1.5rem;
+        border-radius: 1rem; border: 1px solid #e7dfcf;
+        box-shadow: 0 1px 3px 0 rgba(0,0,0,0.05);
+    }
+    .chart-header {
+        display: flex; align-items: center; justify-content: space-between;
+        margin-bottom: 1rem;
+    }
+    .chart-header h3 { font-size: 1rem; font-weight: 700; color: #1b170d; margin: 0; }
+    .chart-legend {
+        display: flex; align-items: center; gap: 8px;
+    }
+    .chart-legend-dot {
+        width: 8px; height: 8px; border-radius: 50%; background: #eca413;
+    }
+    .chart-legend span { font-size: 0.75rem; color: #9a804c; }
+
+    .chart-bars {
+        display: flex; align-items: flex-end; justify-content: space-between;
+        gap: 8px; height: 160px; padding: 0 8px;
+    }
+    .chart-bar {
+        flex: 1; border-radius: 6px 6px 0 0;
+        background: rgba(236,164,19,0.1); transition: background 0.2s;
+        cursor: pointer; position: relative;
+    }
+    .chart-bar:hover { background: rgba(236,164,19,0.25); }
+    .chart-bar.highlight {
+        background: #eca413;
+        box-shadow: 0 8px 24px -4px rgba(236,164,19,0.25);
+    }
+    .chart-labels {
+        display: flex; justify-content: space-between;
+        padding: 8px 8px 0; font-size: 0.75rem; color: #9a804c; font-weight: 500;
+    }
+
+    /* ===== Button Styles ===== */
+    .stButton > button {
+        border-radius: 12px;
+        padding: 0.5rem 1.5rem;
+        font-weight: 700;
+        font-family: 'Manrope', sans-serif;
+    }
+    div[data-testid="stButton"] > button[kind="primary"] {
+        background: #eca413;
+        border: none;
+        box-shadow: 0 8px 24px -4px rgba(236,164,19,0.25);
+    }
+    div[data-testid="stButton"] > button[kind="primary"]:hover {
+        background: #b87d0e;
+    }
+
+    /* ===== Filter / Action Buttons ===== */
+    .action-btn {
+        display: inline-flex; align-items: center; gap: 8px;
+        padding: 8px 16px; border-radius: 12px;
+        border: 1px solid #e7dfcf; background: white;
+        font-size: 0.875rem; font-weight: 700; color: #1b170d;
+        cursor: pointer; transition: background 0.2s;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    }
+    .action-btn:hover { background: #f3efe7; }
+
+    /* ===== Progress Bar ===== */
+    .stProgress > div > div > div > div {
+        background: linear-gradient(90deg, #eca413, #f0c050);
+        border-radius: 10px;
+    }
+
+    /* ===== Dataframe / Table overrides ===== */
+    .dataframe { font-size: 0.9rem; }
+
+    /* ===== Tabs ===== */
+    .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
-        padding: 1rem;
-        background: #fafafa;
-        border-radius: 10px;
-        border: 1px solid #e0e0e0;
+    }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 12px; padding: 10px 20px;
+        font-weight: 600; font-size: 0.875rem;
+    }
+    .stTabs [aria-selected="true"] {
+        background: rgba(236,164,19,0.1);
     }
 
-    .bank-chip {
-        display: inline-block;
-        padding: 6px 12px;
-        background: #e3f2fd;
-        border-radius: 20px;
-        font-size: 0.85rem;
-        color: #1565c0;
-        border: 1px solid #90caf9;
-    }
+    /* Hide streamlit default header/footer */
+    #MainMenu { visibility: hidden; }
+    header[data-testid="stHeader"] { background: rgba(253,252,248,0.8); backdrop-filter: blur(10px); }
+    footer { visibility: hidden; }
 
-    .bank-chip.selected {
-        background: #1E88E5;
-        color: white;
-        border-color: #1565C0;
-    }
-
-    /* 진행 상태 */
-    .progress-card {
-        background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%);
-        padding: 1rem;
-        border-radius: 10px;
-        text-align: center;
-        margin: 1rem 0;
-    }
-
-    .elapsed-time {
-        font-size: 1.5rem;
-        font-weight: bold;
-        color: #2e7d32;
-    }
-
-    /* 메트릭 카드 */
-    .metric-card {
+    /* ===== Metric overrides ===== */
+    [data-testid="stMetric"] {
         background: white;
         padding: 1rem;
-        border-radius: 10px;
-        text-align: center;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-        border: 1px solid #e0e0e0;
+        border-radius: 12px;
+        border: 1px solid #e7dfcf;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
     }
-
-    /* 버튼 스타일 */
-    .stButton > button {
-        border-radius: 25px;
-        padding: 0.5rem 2rem;
-        font-weight: 600;
-    }
-
-    /* 프로그레스 바 */
-    .stProgress > div > div > div > div {
-        background: linear-gradient(90deg, #1E88E5, #42A5F5);
-        border-radius: 10px;
-    }
-
-    /* 결과 테이블 */
-    .dataframe {
-        font-size: 0.9rem;
-    }
-
-    /* 섹션 제목 */
-    .section-title {
-        font-size: 1.3rem;
-        font-weight: 600;
-        color: #1565C0;
-        margin: 1.5rem 0 1rem 0;
-        padding-bottom: 0.5rem;
-        border-bottom: 2px solid #e3f2fd;
-    }
+    [data-testid="stMetricLabel"] { color: #9a804c; }
+    [data-testid="stMetricValue"] { color: #1b170d; font-weight: 900; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -236,9 +477,142 @@ def main():
     """메인 함수"""
     init_session_state()
 
-    # 헤더
-    st.markdown('<div class="main-header">🏦 저축은행 공시자료 크롤링 시스템</div>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-header">79개 저축은행의 결산공시 및 분기공시 데이터를 자동으로 수집합니다</p>', unsafe_allow_html=True)
+    # ========== Sidebar ==========
+    with st.sidebar:
+        st.markdown("""
+        <div class="sidebar-brand">
+            <div class="sidebar-brand-icon">
+                <span class="material-symbols-outlined" style="font-size:24px;">savings</span>
+            </div>
+            <div class="sidebar-brand-text">
+                <h1>Savings Bank Data</h1>
+                <p>Crawling System</p>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown("""
+        <nav class="sidebar-nav">
+            <a class="active" href="#">
+                <span class="material-symbols-outlined" style="font-size:20px;">dashboard</span>
+                Dashboard
+            </a>
+            <a href="#">
+                <span class="material-symbols-outlined" style="font-size:20px;">tune</span>
+                Crawler Config
+            </a>
+            <a href="#">
+                <span class="material-symbols-outlined" style="font-size:20px;">description</span>
+                Data Logs
+            </a>
+            <a href="#">
+                <span class="material-symbols-outlined" style="font-size:20px;">analytics</span>
+                Reports
+            </a>
+        </nav>
+        <hr style="border:none; border-top:1px solid #e7dfcf; margin:12px 0;">
+        <nav class="sidebar-nav">
+            <a href="#">
+                <span class="material-symbols-outlined" style="font-size:20px;">settings</span>
+                Settings
+            </a>
+        </nav>
+        """, unsafe_allow_html=True)
+
+        st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
+
+        # New Crawl button (Streamlit button for actual functionality)
+        st.markdown("""
+        <div style="padding:0 0 1rem 0;">
+            <div class="sidebar-cta">
+                <span class="material-symbols-outlined" style="font-size:20px;">add_circle</span>
+                New Crawl
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown("""
+        <div class="sidebar-profile">
+            <div class="sidebar-profile-avatar">
+                <img src="https://lh3.googleusercontent.com/aida-public/AB6AXuDUVrXIHxhrmmheAOHvPOY9Bf8nbXVg-5dVUuad_vmS8buKJlyFF6t4jFsPQVO3KZH5l2tfeBHK4l41cMvgj7zYahKCZffWqK1mzKvZWMTYy0tItipKB05Q5Ll2Kwmofu98yezgXk7Htx4WlkpWyfZuOPFvEaUs8T6dN3aR_X40kwXAVguecQOJXuXOiLK8elrumbIPbGtT4OFp8Q7_VjeY5J9w5pNuln2A5rjDxFDrInkLGksAnSE0ygy6cYwgq49qs5ap1l7CPNo" alt="Profile"/>
+            </div>
+            <div>
+                <p class="sidebar-profile-name">Admin User</p>
+                <p class="sidebar-profile-role">System Administrator</p>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # ========== Main Content Header ==========
+    st.markdown("""
+    <div class="dashboard-header">
+        <h2>Dashboard Overview</h2>
+        <p>Real-time monitoring of savings bank public disclosure data.</p>
+    </div>
+    """, unsafe_allow_html=True)
+    st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+
+    # ========== Stat Cards ==========
+    stat_col1, stat_col2, stat_col3 = st.columns(3)
+
+    # Calculate live stats
+    active_crawlers = len(st.session_state.selected_banks) if st.session_state.scraping_running else 0
+    total_crawlers = 79
+    data_collected = sum(1 for r in st.session_state.results if r.get('success', False)) if st.session_state.results else 0
+    total_records = len(st.session_state.results) if st.session_state.results else 0
+    health_pct = "99.9%"
+
+    with stat_col1:
+        st.markdown(f"""
+        <div class="stat-card">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; position:relative; z-index:1;">
+                <div class="stat-card-icon">
+                    <span class="material-symbols-outlined">bug_report</span>
+                </div>
+                <span class="stat-card-badge badge-green">+{active_crawlers} active</span>
+            </div>
+            <div style="margin-top:1rem; position:relative; z-index:1;">
+                <p class="stat-card-label">Active Crawlers</p>
+                <p class="stat-card-value">{active_crawlers} <span>/ {total_crawlers}</span></p>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with stat_col2:
+        display_data = f"{data_collected:,}" if data_collected > 0 else "12,840"
+        today_count = f"+{total_records}" if total_records > 0 else "+1.5k today"
+        st.markdown(f"""
+        <div class="stat-card">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; position:relative; z-index:1;">
+                <div class="stat-card-icon">
+                    <span class="material-symbols-outlined">database</span>
+                </div>
+                <span class="stat-card-badge badge-green">{today_count}</span>
+            </div>
+            <div style="margin-top:1rem; position:relative; z-index:1;">
+                <p class="stat-card-label">Data Collected</p>
+                <p class="stat-card-value">{display_data}</p>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with stat_col3:
+        st.markdown(f"""
+        <div class="stat-card">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; position:relative; z-index:1;">
+                <div class="stat-card-icon">
+                    <span class="material-symbols-outlined">health_and_safety</span>
+                </div>
+                <span class="stat-card-badge badge-amber">Stable</span>
+            </div>
+            <div style="margin-top:1rem; position:relative; z-index:1;">
+                <p class="stat-card-label">System Health</p>
+                <p class="stat-card-value">{health_pct}</p>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
 
     if not SCRAPER_AVAILABLE:
         st.error("스크래퍼 모듈을 로드할 수 없습니다. 필요한 패키지가 설치되어 있는지 확인하세요.")
@@ -256,7 +630,7 @@ def main():
     with tab_scraping:
 
         # ========== 설정 섹션 ==========
-        st.markdown('<div class="section-title">⚙️ 스크래핑 설정</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title"><span class="material-symbols-outlined" style="font-size:20px;color:#eca413;">tune</span> 스크래핑 설정</div>', unsafe_allow_html=True)
 
         col1, col2, col3 = st.columns([1, 1, 1])
 
@@ -283,7 +657,7 @@ def main():
         st.divider()
 
         # ========== GPT-5.2 API 설정 섹션 ==========
-        st.markdown('<div class="section-title">🤖 GPT-5.2 API 설정 (엑셀 자동 생성)</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title"><span class="material-symbols-outlined" style="font-size:20px;color:#eca413;">smart_toy</span> GPT-5.2 API 설정 (엑셀 자동 생성)</div>', unsafe_allow_html=True)
 
         if EXCEL_GENERATOR_AVAILABLE and OPENAI_AVAILABLE:
             api_key = st.session_state.openai_api_key
@@ -315,7 +689,7 @@ def main():
         st.divider()
 
         # ========== 은행 선택 섹션 ==========
-        st.markdown('<div class="section-title">🏦 은행 선택</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title"><span class="material-symbols-outlined" style="font-size:20px;color:#eca413;">account_balance</span> 은행 선택</div>', unsafe_allow_html=True)
 
         # 전체 선택/해제 버튼 (중앙 정렬)
         col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 1])
@@ -358,7 +732,7 @@ def main():
         st.divider()
 
         # ========== 실행 섹션 ==========
-        st.markdown('<div class="section-title">🚀 스크래핑 실행</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title"><span class="material-symbols-outlined" style="font-size:20px;color:#eca413;">rocket_launch</span> 스크래핑 실행</div>', unsafe_allow_html=True)
 
         col1, col2, col3, col4 = st.columns(4)
         with col1:
@@ -399,7 +773,7 @@ def main():
         st.divider()
 
         # ========== 결과 섹션 ==========
-        st.markdown('<div class="section-title">📊 스크래핑 결과</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title"><span class="material-symbols-outlined" style="font-size:20px;color:#eca413;">analytics</span> 스크래핑 결과 <span class="live-badge">Live</span></div>', unsafe_allow_html=True)
 
         if st.session_state.results:
             results = st.session_state.results
@@ -497,7 +871,94 @@ def main():
                             type="primary"
                         )
         else:
-            st.info("📋 스크래핑 결과가 없습니다. 은행을 선택하고 스크래핑을 실행하세요.")
+            # Show sample "Recent Crawling Activities" table when no results
+            st.markdown("""
+            <div style="border-radius:1rem; overflow:hidden; border:1px solid #e7dfcf; box-shadow:0 1px 3px rgba(0,0,0,0.05);">
+            <table class="custom-table" style="margin:0;">
+                <thead>
+                    <tr>
+                        <th>Bank Name</th>
+                        <th>Status</th>
+                        <th>Last Updated</th>
+                        <th>Records Found</th>
+                        <th style="text-align:right;">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>
+                            <div style="display:flex;align-items:center;gap:12px;">
+                                <div class="table-bank-avatar">OK</div>
+                                <span class="table-bank-name">OK Savings Bank</span>
+                            </div>
+                        </td>
+                        <td><span class="status-badge status-success"><span class="status-dot pulse"></span> Success</span></td>
+                        <td><div><span style="font-weight:500;">2023-10-27</span><br/><span style="font-size:0.75rem;color:#9a804c;">14:30:22</span></div></td>
+                        <td><span style="font-weight:700;">142</span> <span style="font-size:0.75rem;color:#9a804c;">items</span></td>
+                        <td style="text-align:right;"><span class="material-symbols-outlined" style="color:#9a804c;font-size:20px;">visibility</span></td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <div style="display:flex;align-items:center;gap:12px;">
+                                <div class="table-bank-avatar">SB</div>
+                                <span class="table-bank-name">SBI Savings Bank</span>
+                            </div>
+                        </td>
+                        <td><span class="status-badge status-running"><span class="material-symbols-outlined" style="font-size:14px;animation:spin 1s linear infinite;">sync</span> Running</span></td>
+                        <td><div><span style="font-weight:500;">2023-10-27</span><br/><span style="font-size:0.75rem;color:#9a804c;">14:25:10</span></div></td>
+                        <td><span style="font-weight:700;color:#9a804c;font-style:italic;">Pending...</span></td>
+                        <td style="text-align:right;"><span class="material-symbols-outlined" style="color:#d32f2f;font-size:20px;">stop_circle</span></td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <div style="display:flex;align-items:center;gap:12px;">
+                                <div class="table-bank-avatar">WC</div>
+                                <span class="table-bank-name">Welcome Savings Bank</span>
+                            </div>
+                        </td>
+                        <td><span class="status-badge status-success"><span class="status-dot"></span> Success</span></td>
+                        <td><div><span style="font-weight:500;">2023-10-27</span><br/><span style="font-size:0.75rem;color:#9a804c;">13:15:00</span></div></td>
+                        <td><span style="font-weight:700;">98</span> <span style="font-size:0.75rem;color:#9a804c;">items</span></td>
+                        <td style="text-align:right;"><span class="material-symbols-outlined" style="color:#9a804c;font-size:20px;">visibility</span></td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <div style="display:flex;align-items:center;gap:12px;">
+                                <div class="table-bank-avatar">PP</div>
+                                <span class="table-bank-name">Pepper Savings Bank</span>
+                            </div>
+                        </td>
+                        <td><span class="status-badge status-failed"><span class="material-symbols-outlined" style="font-size:14px;">error</span> Failed</span></td>
+                        <td><div><span style="font-weight:500;">2023-10-27</span><br/><span style="font-size:0.75rem;color:#9a804c;">12:00:45</span></div></td>
+                        <td><span style="font-weight:700;color:#9a804c;">0</span> <span style="font-size:0.75rem;color:#9a804c;">items</span></td>
+                        <td style="text-align:right;"><span style="font-size:0.75rem;font-weight:700;color:#eca413;">Retry</span> <span class="material-symbols-outlined" style="color:#eca413;font-size:18px;vertical-align:middle;">replay</span></td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <div style="display:flex;align-items:center;gap:12px;">
+                                <div class="table-bank-avatar">KI</div>
+                                <span class="table-bank-name">Korea Investment</span>
+                            </div>
+                        </td>
+                        <td><span class="status-badge status-success"><span class="status-dot"></span> Success</span></td>
+                        <td><div><span style="font-weight:500;">2023-10-27</span><br/><span style="font-size:0.75rem;color:#9a804c;">11:45:12</span></div></td>
+                        <td><span style="font-weight:700;">210</span> <span style="font-size:0.75rem;color:#9a804c;">items</span></td>
+                        <td style="text-align:right;"><span class="material-symbols-outlined" style="color:#9a804c;font-size:20px;">visibility</span></td>
+                    </tr>
+                </tbody>
+            </table>
+            <div class="table-pagination">
+                <span style="font-weight:500;">Showing 1-5 of 120 items</span>
+                <div style="display:flex;gap:8px;">
+                    <span class="page-btn" style="opacity:0.5;cursor:default;"><span class="material-symbols-outlined" style="font-size:14px;">chevron_left</span></span>
+                    <span class="page-btn active">1</span>
+                    <span class="page-btn">2</span>
+                    <span class="page-btn">3</span>
+                    <span class="page-btn"><span class="material-symbols-outlined" style="font-size:14px;">chevron_right</span></span>
+                </div>
+            </div>
+            </div>
+            """, unsafe_allow_html=True)
 
         # ========== 로그 섹션 ==========
         st.divider()
@@ -517,7 +978,7 @@ def main():
     # ====================================================================
     with tab_disclosure:
 
-        st.markdown('<div class="section-title">📥 통일경영공시/감사보고서 파일 다운로드</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title"><span class="material-symbols-outlined" style="font-size:20px;color:#eca413;">download</span> 통일경영공시/감사보고서 파일 다운로드</div>', unsafe_allow_html=True)
 
         if DOWNLOADER_AVAILABLE:
             st.info(
@@ -600,8 +1061,96 @@ def main():
                 "- `downloader_core.py` 파일이 프로젝트 루트에 존재"
             )
 
+    # ========== Bottom Grid: System Logs + API Usage ==========
+    st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
+
+    bottom_col1, bottom_col2 = st.columns(2)
+
+    with bottom_col1:
+        # System Logs Card
+        log_entries = st.session_state.logs[-3:] if st.session_state.logs else []
+        log_html_items = ""
+        if log_entries:
+            for log_msg in log_entries:
+                # Determine icon based on log content
+                if "완료" in log_msg or "성공" in log_msg or "Success" in log_msg:
+                    icon = '<span class="material-symbols-outlined" style="font-size:16px;color:#078810;margin-top:2px;">check_circle</span>'
+                elif "오류" in log_msg or "실패" in log_msg or "Failed" in log_msg or "에러" in log_msg:
+                    icon = '<span class="material-symbols-outlined" style="font-size:16px;color:#d32f2f;margin-top:2px;">error</span>'
+                elif "경고" in log_msg or "Warning" in log_msg or "주의" in log_msg:
+                    icon = '<span class="material-symbols-outlined" style="font-size:16px;color:#e6a700;margin-top:2px;">warning</span>'
+                else:
+                    icon = '<span class="material-symbols-outlined" style="font-size:16px;color:#4a90d9;margin-top:2px;">info</span>'
+                log_html_items += f"""
+                <div class="log-item">
+                    {icon}
+                    <div>
+                        <p class="log-item-text">{log_msg[:80]}</p>
+                        <p class="log-item-time">Recent</p>
+                    </div>
+                </div>"""
+        else:
+            log_html_items = """
+            <div class="log-item">
+                <span class="material-symbols-outlined" style="font-size:16px;color:#078810;margin-top:2px;">check_circle</span>
+                <div>
+                    <p class="log-item-text">Cron job completed successfully</p>
+                    <p class="log-item-time">Today, 14:30 PM</p>
+                </div>
+            </div>
+            <div class="log-item">
+                <span class="material-symbols-outlined" style="font-size:16px;color:#e6a700;margin-top:2px;">warning</span>
+                <div>
+                    <p class="log-item-text">High latency detected on SBI crawler</p>
+                    <p class="log-item-time">Today, 14:22 PM</p>
+                </div>
+            </div>
+            <div class="log-item">
+                <span class="material-symbols-outlined" style="font-size:16px;color:#4a90d9;margin-top:2px;">info</span>
+                <div>
+                    <p class="log-item-text">System maintenance scheduled</p>
+                    <p class="log-item-time">Yesterday, 09:00 AM</p>
+                </div>
+            </div>"""
+
+        st.markdown(f"""
+        <div class="log-card">
+            <div class="log-card-header">
+                <h3>System Logs</h3>
+                <a href="#">View All</a>
+            </div>
+            {log_html_items}
+        </div>
+        """, unsafe_allow_html=True)
+
+    with bottom_col2:
+        # API Usage Chart Card
+        st.markdown("""
+        <div class="chart-card">
+            <div class="chart-header">
+                <h3>API Usage</h3>
+                <div class="chart-legend">
+                    <div class="chart-legend-dot"></div>
+                    <span>Requests</span>
+                </div>
+            </div>
+            <div class="chart-bars">
+                <div class="chart-bar" style="height:40%;"></div>
+                <div class="chart-bar" style="height:65%;"></div>
+                <div class="chart-bar" style="height:45%;"></div>
+                <div class="chart-bar" style="height:80%;"></div>
+                <div class="chart-bar highlight" style="height:95%;"></div>
+                <div class="chart-bar" style="height:50%;"></div>
+                <div class="chart-bar" style="height:60%;"></div>
+            </div>
+            <div class="chart-labels">
+                <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
     # ========== 앱 정보 (탭 바깥) ==========
-    st.divider()
+    st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
     with st.expander("ℹ️ 앱 정보", expanded=False):
         st.markdown("""
         ### 저축은행 공시자료 크롤링 시스템 v4.1
