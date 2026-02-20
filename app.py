@@ -247,355 +247,361 @@ def main():
     config = Config()
     all_banks = config.BANKS
 
-    # ========== 설정 섹션 ==========
-    st.markdown('<div class="section-title">⚙️ 스크래핑 설정</div>', unsafe_allow_html=True)
+    # ========== 메인 탭 구조 ==========
+    tab_scraping, tab_disclosure = st.tabs(["📊 데이터 스크래핑", "📥 경영공시/감사보고서 다운로드"])
 
-    col1, col2, col3 = st.columns([1, 1, 1])
+    # ====================================================================
+    # 탭 1: 데이터 스크래핑
+    # ====================================================================
+    with tab_scraping:
 
-    with col1:
-        scrape_type = st.selectbox(
-            "📋 스크래핑 유형",
-            options=["quarterly", "settlement"],
-            format_func=lambda x: "📊 분기공시 (3개월)" if x == "quarterly" else "🏦 결산공시 (연말)",
-            help="수집할 공시 유형을 선택하세요"
-        )
+        # ========== 설정 섹션 ==========
+        st.markdown('<div class="section-title">⚙️ 스크래핑 설정</div>', unsafe_allow_html=True)
 
-    with col2:
-        download_filename = st.text_input(
-            "📁 다운로드 파일명",
-            value=f"저축은행_{scrape_type}_{datetime.now().strftime('%Y%m%d')}",
-            help="다운로드할 ZIP 파일의 이름을 지정하세요"
-        )
-        st.caption("💡 파일은 브라우저 다운로드 폴더에 저장됩니다")
+        col1, col2, col3 = st.columns([1, 1, 1])
 
-    with col3:
-        auto_zip = st.checkbox("🗜️ 완료 후 자동 압축", value=True)
-        save_md = st.checkbox("📝 MD 파일도 함께 생성", value=False)
-
-    st.divider()
-
-    # ========== GPT-5.2 API 설정 섹션 ==========
-    st.markdown('<div class="section-title">🤖 GPT-5.2 API 설정 (엑셀 자동 생성)</div>', unsafe_allow_html=True)
-
-    if EXCEL_GENERATOR_AVAILABLE and OPENAI_AVAILABLE:
-        api_key = st.session_state.openai_api_key
-
-        col1, col2 = st.columns([2, 1])
         with col1:
-            if api_key:
-                st.success("✅ API Key가 설정되어 있습니다. (`.streamlit/secrets.toml` 또는 환경변수)")
-            else:
-                st.warning(
-                    "⚠️ API Key가 설정되지 않았습니다.\n\n"
-                    "**설정 방법 (택 1):**\n"
-                    "1. `.streamlit/secrets.toml` 파일에 `OPENAI_API_KEY = \"sk-...\"` 입력\n"
-                    "2. 환경변수 `OPENAI_API_KEY` 설정"
-                )
+            scrape_type = st.selectbox(
+                "📋 스크래핑 유형",
+                options=["quarterly", "settlement"],
+                format_func=lambda x: "📊 분기공시 (3개월)" if x == "quarterly" else "🏦 결산공시 (연말)",
+                help="수집할 공시 유형을 선택하세요"
+            )
 
         with col2:
-            use_chatgpt = st.checkbox(
-                "🤖 GPT-5.2로 엑셀 생성",
-                value=bool(api_key),
-                disabled=not api_key,
-                help="활성화하면 GPT-5.2가 데이터를 분석하여 요약 엑셀을 생성합니다."
+            download_filename = st.text_input(
+                "📁 다운로드 파일명",
+                value=f"저축은행_{scrape_type}_{datetime.now().strftime('%Y%m%d')}",
+                help="다운로드할 ZIP 파일의 이름을 지정하세요"
             )
-    else:
-        use_chatgpt = False
-        api_key = ""
-        st.warning("⚠️ GPT-5.2 기능을 사용하려면 openai 패키지가 필요합니다: `pip install openai>=2.0.0`")
+            st.caption("💡 파일은 브라우저 다운로드 폴더에 저장됩니다")
 
-    st.divider()
+        with col3:
+            auto_zip = st.checkbox("🗜️ 완료 후 자동 압축", value=True)
+            save_md = st.checkbox("📝 MD 파일도 함께 생성", value=False)
 
-    # ========== 은행 선택 섹션 ==========
-    st.markdown('<div class="section-title">🏦 은행 선택</div>', unsafe_allow_html=True)
+        st.divider()
 
-    # 전체 선택/해제 버튼 (중앙 정렬)
-    col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 1])
-    with col2:
-        if st.button("✅ 전체 선택", use_container_width=True, type="primary"):
-            # 모든 은행 체크박스 상태를 True로 설정
-            for bank in all_banks:
-                st.session_state[f"bank_{bank}"] = True
-            st.session_state.selected_banks = all_banks.copy()
-            st.rerun()
-    with col3:
-        st.metric("선택된 은행", f"{len(st.session_state.selected_banks)}개 / 79개")
-    with col4:
-        if st.button("❌ 전체 해제", use_container_width=True):
-            # 모든 은행 체크박스 상태를 False로 설정
-            for bank in all_banks:
-                st.session_state[f"bank_{bank}"] = False
-            st.session_state.selected_banks = []
-            st.rerun()
+        # ========== GPT-5.2 API 설정 섹션 ==========
+        st.markdown('<div class="section-title">🤖 GPT-5.2 API 설정 (엑셀 자동 생성)</div>', unsafe_allow_html=True)
 
-    st.write("")
+        if EXCEL_GENERATOR_AVAILABLE and OPENAI_AVAILABLE:
+            api_key = st.session_state.openai_api_key
 
-    # 은행 체크박스 그리드 (중앙 정렬, 8열)
-    st.markdown("**은행을 개별 선택하거나 전체 선택 버튼을 사용하세요:**")
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                if api_key:
+                    st.success("✅ API Key가 설정되어 있습니다. (`.streamlit/secrets.toml` 또는 환경변수)")
+                else:
+                    st.warning(
+                        "⚠️ API Key가 설정되지 않았습니다.\n\n"
+                        "**설정 방법 (택 1):**\n"
+                        "1. `.streamlit/secrets.toml` 파일에 `OPENAI_API_KEY = \"sk-...\"` 입력\n"
+                        "2. 환경변수 `OPENAI_API_KEY` 설정"
+                    )
 
-    # 8열로 은행 체크박스 표시
-    cols_per_row = 8
-    rows = [all_banks[i:i + cols_per_row] for i in range(0, len(all_banks), cols_per_row)]
-
-    # 체크박스 초기값 설정 (session_state에 없으면 False)
-    for bank in all_banks:
-        if f"bank_{bank}" not in st.session_state:
-            st.session_state[f"bank_{bank}"] = bank in st.session_state.selected_banks
-
-    for row in rows:
-        cols = st.columns(cols_per_row)
-        for idx, bank in enumerate(row):
-            with cols[idx]:
-                # 체크박스 상태를 session_state에서 직접 관리
-                st.checkbox(bank, key=f"bank_{bank}")
-
-    # 체크박스 상태에서 선택된 은행 목록 업데이트
-    selected_banks = [bank for bank in all_banks if st.session_state.get(f"bank_{bank}", False)]
-    st.session_state.selected_banks = selected_banks
-
-    st.divider()
-
-    # ========== 실행 섹션 ==========
-    st.markdown('<div class="section-title">🚀 스크래핑 실행</div>', unsafe_allow_html=True)
-
-    # 정보 표시
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("📊 선택된 은행", f"{len(selected_banks)}개")
-    with col2:
-        type_name = "분기공시" if scrape_type == "quarterly" else "결산공시"
-        st.metric("📋 스크래핑 유형", type_name)
-    with col3:
-        st.metric("📅 실행 날짜", datetime.now().strftime("%Y-%m-%d"))
-    with col4:
-        if st.session_state.elapsed_time > 0:
-            st.metric("⏱️ 소요 시간", format_elapsed_time(st.session_state.elapsed_time))
-        else:
-            st.metric("⏱️ 소요 시간", "-")
-
-    st.write("")
-
-    # 스크래핑 시작 버튼
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        start_disabled = not selected_banks or st.session_state.scraping_running
-        if st.button("🚀 스크래핑 시작", type="primary", use_container_width=True, disabled=start_disabled):
-            if not selected_banks:
-                st.error("스크래핑할 은행을 선택하세요.")
-            else:
-                st.session_state.ai_table_generated = False
-                run_scraping(
-                    selected_banks,
-                    scrape_type,
-                    auto_zip,
-                    download_filename,
-                    use_chatgpt=use_chatgpt,
-                    api_key=api_key
+            with col2:
+                use_chatgpt = st.checkbox(
+                    "🤖 GPT-5.2로 엑셀 생성",
+                    value=bool(api_key),
+                    disabled=not api_key,
+                    help="활성화하면 GPT-5.2가 데이터를 분석하여 요약 엑셀을 생성합니다."
                 )
+        else:
+            use_chatgpt = False
+            api_key = ""
+            st.warning("⚠️ GPT-5.2 기능을 사용하려면 openai 패키지가 필요합니다: `pip install openai>=2.0.0`")
 
-    if st.session_state.scraping_running:
-        st.info("⏳ 스크래핑이 진행 중입니다. 잠시만 기다려주세요...")
+        st.divider()
 
-    st.divider()
+        # ========== 은행 선택 섹션 ==========
+        st.markdown('<div class="section-title">🏦 은행 선택</div>', unsafe_allow_html=True)
 
-    # ========== 결과 섹션 ==========
-    st.markdown('<div class="section-title">📊 스크래핑 결과</div>', unsafe_allow_html=True)
+        # 전체 선택/해제 버튼 (중앙 정렬)
+        col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 1])
+        with col2:
+            if st.button("✅ 전체 선택", use_container_width=True, type="primary"):
+                for bank in all_banks:
+                    st.session_state[f"bank_{bank}"] = True
+                st.session_state.selected_banks = all_banks.copy()
+                st.rerun()
+        with col3:
+            st.metric("선택된 은행", f"{len(st.session_state.selected_banks)}개 / 79개")
+        with col4:
+            if st.button("❌ 전체 해제", use_container_width=True):
+                for bank in all_banks:
+                    st.session_state[f"bank_{bank}"] = False
+                st.session_state.selected_banks = []
+                st.rerun()
 
-    if st.session_state.results:
-        results = st.session_state.results
-        success_count = sum(1 for r in results if r['success'])
-        fail_count = len(results) - success_count
+        st.write("")
 
-        # 결과 요약
+        # 은행 체크박스 그리드 (중앙 정렬, 8열)
+        st.markdown("**은행을 개별 선택하거나 전체 선택 버튼을 사용하세요:**")
+
+        cols_per_row = 8
+        rows = [all_banks[i:i + cols_per_row] for i in range(0, len(all_banks), cols_per_row)]
+
+        for bank in all_banks:
+            if f"bank_{bank}" not in st.session_state:
+                st.session_state[f"bank_{bank}"] = bank in st.session_state.selected_banks
+
+        for row in rows:
+            cols = st.columns(cols_per_row)
+            for idx, bank in enumerate(row):
+                with cols[idx]:
+                    st.checkbox(bank, key=f"bank_{bank}")
+
+        selected_banks = [bank for bank in all_banks if st.session_state.get(f"bank_{bank}", False)]
+        st.session_state.selected_banks = selected_banks
+
+        st.divider()
+
+        # ========== 실행 섹션 ==========
+        st.markdown('<div class="section-title">🚀 스크래핑 실행</div>', unsafe_allow_html=True)
+
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("📁 전체", f"{len(results)}개")
+            st.metric("📊 선택된 은행", f"{len(selected_banks)}개")
         with col2:
-            st.metric("✅ 성공", f"{success_count}개")
+            type_name = "분기공시" if scrape_type == "quarterly" else "결산공시"
+            st.metric("📋 스크래핑 유형", type_name)
         with col3:
-            st.metric("❌ 실패", f"{fail_count}개")
+            st.metric("📅 실행 날짜", datetime.now().strftime("%Y-%m-%d"))
         with col4:
-            st.metric("⏱️ 총 소요시간", format_elapsed_time(st.session_state.elapsed_time))
-
-        st.write("")
-
-        # 결과 테이블 (은행명, 공시날짜, 상태, 파일)
-        df = create_summary_dataframe(results, st.session_state.bank_dates)
-        st.dataframe(df, use_container_width=True, hide_index=True)
-
-        # 다운로드 버튼
-        st.write("")
-
-        # ========== AI 표 정리 및 엑셀 반환 옵션 ==========
-        st.markdown("#### 🤖 GPT-5.2 AI 표 정리 및 엑셀 반환")
-
-        if EXCEL_GENERATOR_AVAILABLE and OPENAI_AVAILABLE and st.session_state.openai_api_key:
-            # AI 엑셀이 이미 생성된 경우 (자동 생성 또는 수동 생성)
-            if st.session_state.summary_excel_path and os.path.exists(st.session_state.summary_excel_path):
-                # 미리보기 테이블 표시
-                try:
-                    preview_df = pd.read_excel(st.session_state.summary_excel_path, sheet_name='분기총괄')
-                    st.markdown("**AI 분석 결과 미리보기:**")
-                    st.dataframe(preview_df, use_container_width=True, hide_index=True)
-                except Exception:
-                    pass
-
-                # 정합성 검증 결과 표시
-                _display_validation_result(st.session_state.validation_result)
-
-                col1, col2, col3 = st.columns([1, 2, 1])
-                with col2:
-                    with open(st.session_state.summary_excel_path, 'rb') as f:
-                        st.download_button(
-                            label="📊 분기총괄 엑셀 다운로드",
-                            data=f,
-                            file_name=f"저축은행_분기총괄_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            use_container_width=True,
-                            type="secondary"
-                        )
+            if st.session_state.elapsed_time > 0:
+                st.metric("⏱️ 소요 시간", format_elapsed_time(st.session_state.elapsed_time))
             else:
-                # AI 엑셀 생성 버튼 (수동 트리거)
-                st.info("💡 GPT-5.2를 활용하여 스크래핑 데이터를 표로 정리하고 엑셀로 반환할 수 있습니다.")
-                col1, col2, col3 = st.columns([1, 2, 1])
-                with col2:
-                    if st.button("🤖 AI로 표 정리 및 엑셀 생성", use_container_width=True, type="secondary"):
-                        with st.spinner("GPT-5.2가 데이터를 분석하고 정합성을 검증하는 중..."):
-                            try:
-                                gen_result = generate_excel_with_chatgpt(
-                                    scraped_results=results,
-                                    api_key=st.session_state.openai_api_key,
-                                    use_ai=True,
-                                    validate=True
-                                )
-                                summary_path = gen_result.get("filepath") if isinstance(gen_result, dict) else gen_result
-                                validation = gen_result.get("validation") if isinstance(gen_result, dict) else None
-
-                                if summary_path:
-                                    st.session_state.summary_excel_path = summary_path
-                                    st.session_state.validation_result = validation
-                                    st.session_state.ai_table_generated = True
-                                    st.success("✅ AI 표 정리, 정합성 검증 및 엑셀 생성 완료!")
-                                    st.rerun()
-                                else:
-                                    st.error("엑셀 생성에 실패했습니다.")
-                            except Exception as e:
-                                st.error(f"AI 엑셀 생성 중 오류: {str(e)}")
-        else:
-            if not st.session_state.openai_api_key:
-                st.info("💡 `.streamlit/secrets.toml`에 API Key를 설정하면 AI 표 정리 기능을 사용할 수 있습니다.")
-            elif not EXCEL_GENERATOR_AVAILABLE or not OPENAI_AVAILABLE:
-                st.info("💡 `pip install openai>=2.0.0` 설치 후 AI 표 정리 기능을 사용할 수 있습니다.")
+                st.metric("⏱️ 소요 시간", "-")
 
         st.write("")
-
-        # ZIP 파일 다운로드
-        if 'zip_path' in st.session_state and st.session_state.zip_path:
-            st.markdown("#### 📦 전체 데이터 압축 파일")
-            col1, col2, col3 = st.columns([1, 2, 1])
-            with col2:
-                with open(st.session_state.zip_path, 'rb') as f:
-                    st.download_button(
-                        label="📥 결과 파일 다운로드 (ZIP)",
-                        data=f,
-                        file_name=f"{download_filename}.zip",
-                        mime="application/zip",
-                        use_container_width=True,
-                        type="primary"
-                    )
-    else:
-        st.info("📋 스크래핑 결과가 없습니다. 은행을 선택하고 스크래핑을 실행하세요.")
-
-    st.divider()
-
-    # ========== 공시파일 다운로드 섹션 ==========
-    st.markdown('<div class="section-title">📥 통일경영공시/감사보고서 파일 다운로드</div>', unsafe_allow_html=True)
-
-    if DOWNLOADER_AVAILABLE:
-        st.info(
-            "💡 저축은행중앙회 사이트에서 통일경영공시 파일과 감사(검토)보고서를 "
-            "자동으로 다운로드합니다. (Selenium 기반)"
-        )
 
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
-            disclosure_disabled = st.session_state.disclosure_running or st.session_state.scraping_running
-            if st.button(
-                "📥 공시파일 일괄 다운로드 시작",
-                type="secondary",
-                use_container_width=True,
-                disabled=disclosure_disabled
-            ):
-                run_disclosure_download()
+            start_disabled = not selected_banks or st.session_state.scraping_running
+            if st.button("🚀 스크래핑 시작", type="primary", use_container_width=True, disabled=start_disabled):
+                if not selected_banks:
+                    st.error("스크래핑할 은행을 선택하세요.")
+                else:
+                    st.session_state.ai_table_generated = False
+                    run_scraping(
+                        selected_banks,
+                        scrape_type,
+                        auto_zip,
+                        download_filename,
+                        use_chatgpt=use_chatgpt,
+                        api_key=api_key
+                    )
 
-        if st.session_state.disclosure_running:
-            st.info("⏳ 공시파일 다운로드가 진행 중입니다...")
+        if st.session_state.scraping_running:
+            st.info("⏳ 스크래핑이 진행 중입니다. 잠시만 기다려주세요...")
 
-        # 다운로드 결과 표시
-        if st.session_state.disclosure_results:
-            results = st.session_state.disclosure_results
-            success = len([r for r in results if r['상태'] == '완료'])
-            partial = len([r for r in results if r['상태'] == '부분완료'])
-            failed = len([r for r in results if r['상태'] == '실패'])
+        st.divider()
+
+        # ========== 결과 섹션 ==========
+        st.markdown('<div class="section-title">📊 스크래핑 결과</div>', unsafe_allow_html=True)
+
+        if st.session_state.results:
+            results = st.session_state.results
+            success_count = sum(1 for r in results if r['success'])
+            fail_count = len(results) - success_count
 
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                st.metric("전체", f"{len(results)}개")
+                st.metric("📁 전체", f"{len(results)}개")
             with col2:
-                st.metric("완료", f"{success}개")
+                st.metric("✅ 성공", f"{success_count}개")
             with col3:
-                st.metric("부분완료", f"{partial}개")
+                st.metric("❌ 실패", f"{fail_count}개")
             with col4:
-                st.metric("실패", f"{failed}개")
+                st.metric("⏱️ 총 소요시간", format_elapsed_time(st.session_state.elapsed_time))
 
-            # 결과 테이블
-            st.dataframe(
-                pd.DataFrame(results),
-                use_container_width=True,
-                hide_index=True
-            )
+            st.write("")
 
-            # ZIP 다운로드 버튼
-            if st.session_state.disclosure_zip_path and os.path.exists(st.session_state.disclosure_zip_path):
+            df = create_summary_dataframe(results, st.session_state.bank_dates)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+
+            st.write("")
+
+            # ========== AI 표 정리 및 엑셀 반환 옵션 ==========
+            st.markdown("#### 🤖 GPT-5.2 AI 표 정리 및 엑셀 반환")
+
+            if EXCEL_GENERATOR_AVAILABLE and OPENAI_AVAILABLE and st.session_state.openai_api_key:
+                if st.session_state.summary_excel_path and os.path.exists(st.session_state.summary_excel_path):
+                    try:
+                        preview_df = pd.read_excel(st.session_state.summary_excel_path, sheet_name='분기총괄')
+                        st.markdown("**AI 분석 결과 미리보기:**")
+                        st.dataframe(preview_df, use_container_width=True, hide_index=True)
+                    except Exception:
+                        pass
+
+                    _display_validation_result(st.session_state.validation_result)
+
+                    col1, col2, col3 = st.columns([1, 2, 1])
+                    with col2:
+                        with open(st.session_state.summary_excel_path, 'rb') as f:
+                            st.download_button(
+                                label="📊 분기총괄 엑셀 다운로드",
+                                data=f,
+                                file_name=f"저축은행_분기총괄_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                use_container_width=True,
+                                type="secondary"
+                            )
+                else:
+                    st.info("💡 GPT-5.2를 활용하여 스크래핑 데이터를 표로 정리하고 엑셀로 반환할 수 있습니다.")
+                    col1, col2, col3 = st.columns([1, 2, 1])
+                    with col2:
+                        if st.button("🤖 AI로 표 정리 및 엑셀 생성", use_container_width=True, type="secondary"):
+                            with st.spinner("GPT-5.2가 데이터를 분석하고 정합성을 검증하는 중..."):
+                                try:
+                                    gen_result = generate_excel_with_chatgpt(
+                                        scraped_results=results,
+                                        api_key=st.session_state.openai_api_key,
+                                        use_ai=True,
+                                        validate=True
+                                    )
+                                    summary_path = gen_result.get("filepath") if isinstance(gen_result, dict) else gen_result
+                                    validation = gen_result.get("validation") if isinstance(gen_result, dict) else None
+
+                                    if summary_path:
+                                        st.session_state.summary_excel_path = summary_path
+                                        st.session_state.validation_result = validation
+                                        st.session_state.ai_table_generated = True
+                                        st.success("✅ AI 표 정리, 정합성 검증 및 엑셀 생성 완료!")
+                                        st.rerun()
+                                    else:
+                                        st.error("엑셀 생성에 실패했습니다.")
+                                except Exception as e:
+                                    st.error(f"AI 엑셀 생성 중 오류: {str(e)}")
+            else:
+                if not st.session_state.openai_api_key:
+                    st.info("💡 `.streamlit/secrets.toml`에 API Key를 설정하면 AI 표 정리 기능을 사용할 수 있습니다.")
+                elif not EXCEL_GENERATOR_AVAILABLE or not OPENAI_AVAILABLE:
+                    st.info("💡 `pip install openai>=2.0.0` 설치 후 AI 표 정리 기능을 사용할 수 있습니다.")
+
+            st.write("")
+
+            # ZIP 파일 다운로드
+            if 'zip_path' in st.session_state and st.session_state.zip_path:
+                st.markdown("#### 📦 전체 데이터 압축 파일")
                 col1, col2, col3 = st.columns([1, 2, 1])
                 with col2:
-                    with open(st.session_state.disclosure_zip_path, 'rb') as f:
+                    with open(st.session_state.zip_path, 'rb') as f:
                         st.download_button(
-                            label="📥 공시파일 ZIP 다운로드",
+                            label="📥 결과 파일 다운로드 (ZIP)",
                             data=f,
-                            file_name=f"저축은행_공시파일_{datetime.now().strftime('%Y%m%d')}.zip",
+                            file_name=f"{download_filename}.zip",
                             mime="application/zip",
                             use_container_width=True,
                             type="primary"
                         )
-
-        # 다운로드 로그
-        if st.session_state.disclosure_logs:
-            with st.expander("📝 다운로드 로그", expanded=False):
-                st.text_area(
-                    "로그",
-                    value="\n".join(st.session_state.disclosure_logs[-100:]),
-                    height=200,
-                    disabled=True
-                )
-    else:
-        st.warning("⚠️ 공시파일 다운로드 기능을 사용하려면 selenium 패키지가 필요합니다.")
-
-    st.divider()
-
-    # ========== 로그 섹션 ==========
-    with st.expander("📝 실행 로그 보기", expanded=False):
-        if st.session_state.logs:
-            log_text = "\n".join(st.session_state.logs)
-            st.text_area("로그", value=log_text, height=300, disabled=True)
-
-            if st.button("🗑️ 로그 지우기"):
-                st.session_state.logs = []
-                st.rerun()
         else:
-            st.info("로그가 없습니다.")
+            st.info("📋 스크래핑 결과가 없습니다. 은행을 선택하고 스크래핑을 실행하세요.")
 
-    # ========== 앱 정보 ==========
+        # ========== 로그 섹션 ==========
+        st.divider()
+        with st.expander("📝 실행 로그 보기", expanded=False):
+            if st.session_state.logs:
+                log_text = "\n".join(st.session_state.logs)
+                st.text_area("로그", value=log_text, height=300, disabled=True)
+
+                if st.button("🗑️ 로그 지우기"):
+                    st.session_state.logs = []
+                    st.rerun()
+            else:
+                st.info("로그가 없습니다.")
+
+    # ====================================================================
+    # 탭 2: 경영공시/감사보고서 파일 다운로드
+    # ====================================================================
+    with tab_disclosure:
+
+        st.markdown('<div class="section-title">📥 통일경영공시/감사보고서 파일 다운로드</div>', unsafe_allow_html=True)
+
+        if DOWNLOADER_AVAILABLE:
+            st.info(
+                "💡 저축은행중앙회 사이트에서 **통일경영공시 파일**과 **감사(검토)보고서**를 "
+                "자동으로 일괄 다운로드합니다. (Selenium 기반)\n\n"
+                f"**대상 URL:** `{TARGET_URL}`"
+            )
+
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                disclosure_disabled = st.session_state.disclosure_running or st.session_state.scraping_running
+                if st.button(
+                    "📥 공시파일 일괄 다운로드 시작",
+                    type="primary",
+                    use_container_width=True,
+                    disabled=disclosure_disabled,
+                    key="btn_disclosure_download"
+                ):
+                    run_disclosure_download()
+
+            if st.session_state.disclosure_running:
+                st.info("⏳ 공시파일 다운로드가 진행 중입니다...")
+
+            # 다운로드 결과 표시
+            if st.session_state.disclosure_results:
+                st.divider()
+                st.markdown("#### 📊 다운로드 결과")
+
+                dl_results = st.session_state.disclosure_results
+                success = len([r for r in dl_results if r['상태'] == '완료'])
+                partial = len([r for r in dl_results if r['상태'] == '부분완료'])
+                failed = len([r for r in dl_results if r['상태'] == '실패'])
+
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("전체", f"{len(dl_results)}개")
+                with col2:
+                    st.metric("완료", f"{success}개")
+                with col3:
+                    st.metric("부분완료", f"{partial}개")
+                with col4:
+                    st.metric("실패", f"{failed}개")
+
+                st.dataframe(
+                    pd.DataFrame(dl_results),
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+                # ZIP 다운로드 버튼
+                if st.session_state.disclosure_zip_path and os.path.exists(st.session_state.disclosure_zip_path):
+                    col1, col2, col3 = st.columns([1, 2, 1])
+                    with col2:
+                        with open(st.session_state.disclosure_zip_path, 'rb') as f:
+                            st.download_button(
+                                label="📥 공시파일 ZIP 다운로드",
+                                data=f,
+                                file_name=f"저축은행_공시파일_{datetime.now().strftime('%Y%m%d')}.zip",
+                                mime="application/zip",
+                                use_container_width=True,
+                                type="primary",
+                                key="btn_disclosure_zip"
+                            )
+
+            # 다운로드 로그
+            if st.session_state.disclosure_logs:
+                with st.expander("📝 다운로드 로그", expanded=False):
+                    st.text_area(
+                        "로그",
+                        value="\n".join(st.session_state.disclosure_logs[-100:]),
+                        height=200,
+                        disabled=True,
+                        key="disclosure_log_area"
+                    )
+        else:
+            st.warning(
+                "⚠️ 공시파일 다운로드 기능을 사용할 수 없습니다.\n\n"
+                "**필요 조건:**\n"
+                "- `selenium` 패키지 설치\n"
+                "- `downloader_core.py` 파일이 프로젝트 루트에 존재"
+            )
+
+    # ========== 앱 정보 (탭 바깥) ==========
+    st.divider()
     with st.expander("ℹ️ 앱 정보", expanded=False):
         st.markdown("""
         ### 저축은행 공시자료 크롤링 시스템 v4.1

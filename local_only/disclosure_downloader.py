@@ -29,6 +29,10 @@ try:
 except ImportError as e:
     print(f"downloader_core 모듈 로드 실패: {e}")
     CORE_AVAILABLE = False
+    PSUTIL_AVAILABLE = False
+
+    def get_memory_usage():
+        return 0.0
 
 # 전역 변수
 TODAY = datetime.now().strftime("%Y%m%d")
