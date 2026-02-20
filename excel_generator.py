@@ -1,6 +1,6 @@
 """
 ChatGPT API를 활용한 저축은행 데이터 엑셀 생성 모듈
-버전: 1.0
+버전: 2.0 - GPT-5.2 업그레이드
 """
 
 import os
@@ -34,8 +34,8 @@ class ExcelGeneratorConfig:
         "위하여신비"     # 위험가중자산비율
     ]
 
-    # ChatGPT 모델 설정
-    MODEL = "gpt-4o-mini"
+    # ChatGPT 모델 설정 (GPT-5.2)
+    MODEL = "gpt-5.2"
     MAX_TOKENS = 4000
     TEMPERATURE = 0.1
 
