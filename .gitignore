@@ -1,0 +1,16 @@
+# Streamlit secrets (API 키 보호)
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# 환경 변수
+.env
+
+# 임시 파일
+*.tmp
+*.log
