@@ -163,18 +163,33 @@ JSON 형식 예시:
             else:
                 extracted = {}
 
+            # ChatGPT 결과가 비어있거나 핵심 값이 없으면 DirectExcelGenerator로 폴백
+            key_fields = ["자산", "순이익", "누자본"]
+            has_key_data = any(
+                extracted.get(k) is not None and extracted.get(k) != ""
+                for k in key_fields
+            )
+            if not has_key_data and filepath:
+                fallback = DirectExcelGenerator()
+                fallback_data = fallback._extract_from_file(filepath)
+                if fallback_data:
+                    # ChatGPT 결과와 병합 (폴백 값으로 빈 항목 보충)
+                    for k, v in fallback_data.items():
+                        if v is not None and (extracted.get(k) is None or extracted.get(k) == ""):
+                            extracted[k] = v
+
             # 데이터 행 구성
             row = {
                 "No": idx,
                 "은행명": bank_name,
-                "자산(최근분기)": extracted.get("자산", ""),
-                "이익(최근분기)": extracted.get("이익", ""),
-                "순이익": extracted.get("순이익", ""),
-                "누자본(최근분기신)": extracted.get("누자본", ""),
-                "최근분기": extracted.get("최근분기", ""),
-                "신(최근분기)": extracted.get("신", ""),
-                "기자본비": extracted.get("기자본비", ""),
-                "위하여신비": extracted.get("위하여신비", "")
+                "자산(최근분기)": extracted.get("자산") or "",
+                "이익(최근분기)": extracted.get("이익") or "",
+                "순이익": extracted.get("순이익") or "",
+                "누자본(최근분기신)": extracted.get("누자본") or "",
+                "최근분기": extracted.get("최근분기") or "",
+                "신(최근분기)": extracted.get("신") or "",
+                "기자본비": extracted.get("기자본비") or "",
+                "위하여신비": extracted.get("위하여신비") or ""
             }
             formatted_data.append(row)
 
