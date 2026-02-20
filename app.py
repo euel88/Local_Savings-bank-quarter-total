@@ -115,28 +115,6 @@ st.markdown("""
         font-size: 0.75rem; font-weight: 500; color: #9a804c; margin: 0;
     }
 
-    .sidebar-nav a {
-        display: flex; align-items: center; gap: 12px;
-        padding: 12px 16px; border-radius: 12px;
-        text-decoration: none; font-size: 0.875rem; font-weight: 500;
-        color: #1b170d; transition: background 0.2s;
-    }
-    .sidebar-nav a:hover { background: #f3efe7; }
-    .sidebar-nav a.active {
-        background: rgba(236,164,19,0.1); color: #b87d0e; font-weight: 700;
-    }
-
-    .sidebar-cta {
-        display: flex; align-items: center; justify-content: center; gap: 8px;
-        width: 100%; height: 48px; border-radius: 12px;
-        background: #eca413; color: white; font-weight: 700; font-size: 0.875rem;
-        border: none; cursor: pointer;
-        box-shadow: 0 8px 24px -4px rgba(236,164,19,0.25);
-        transition: background 0.2s;
-        text-decoration: none;
-    }
-    .sidebar-cta:hover { background: #b87d0e; }
-
     .sidebar-profile {
         display: flex; align-items: center; gap: 12px;
         padding: 10px; border-radius: 12px; transition: background 0.2s;
@@ -274,92 +252,6 @@ st.markdown("""
     @keyframes spin {
         from { transform: rotate(0deg); }
         to { transform: rotate(360deg); }
-    }
-
-    .table-pagination {
-        padding: 1rem 1.25rem;
-        border-top: 1px solid #e7dfcf;
-        background: #fcfaf8;
-        display: flex; align-items: center; justify-content: space-between;
-        font-size: 0.75rem; color: #9a804c;
-    }
-    .page-btn {
-        width: 32px; height: 32px; display: inline-flex;
-        align-items: center; justify-content: center;
-        border-radius: 8px; border: 1px solid #e7dfcf;
-        background: white; color: #9a804c;
-        font-size: 0.75rem; font-weight: 500; cursor: pointer;
-        transition: all 0.2s;
-    }
-    .page-btn:hover { background: #eca413; color: white; border-color: #eca413; }
-    .page-btn.active {
-        background: #eca413; color: white; border-color: #eca413;
-        font-weight: 700; box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-    }
-
-    /* ===== Log Card ===== */
-    .log-card {
-        background: #ffffff; padding: 1.5rem;
-        border-radius: 1rem; border: 1px solid #e7dfcf;
-        box-shadow: 0 1px 3px 0 rgba(0,0,0,0.05);
-    }
-    .log-card-header {
-        display: flex; align-items: center; justify-content: space-between;
-        margin-bottom: 1rem;
-    }
-    .log-card-header h3 { font-size: 1rem; font-weight: 700; color: #1b170d; margin: 0; }
-    .log-card-header a {
-        font-size: 0.75rem; font-weight: 700; color: #eca413;
-        text-decoration: none;
-    }
-    .log-card-header a:hover { text-decoration: underline; }
-
-    .log-item {
-        display: flex; align-items: flex-start; gap: 12px;
-        padding: 12px; border-radius: 12px;
-        background: #fcfaf8; border: 1px solid #e7dfcf;
-        margin-bottom: 0.75rem;
-    }
-    .log-item:last-child { margin-bottom: 0; }
-    .log-item-text { font-size: 0.875rem; font-weight: 500; color: #1b170d; margin: 0; }
-    .log-item-time { font-size: 0.75rem; color: #9a804c; margin: 0; }
-
-    /* ===== Chart Card ===== */
-    .chart-card {
-        background: #ffffff; padding: 1.5rem;
-        border-radius: 1rem; border: 1px solid #e7dfcf;
-        box-shadow: 0 1px 3px 0 rgba(0,0,0,0.05);
-    }
-    .chart-header {
-        display: flex; align-items: center; justify-content: space-between;
-        margin-bottom: 1rem;
-    }
-    .chart-header h3 { font-size: 1rem; font-weight: 700; color: #1b170d; margin: 0; }
-    .chart-legend {
-        display: flex; align-items: center; gap: 8px;
-    }
-    .chart-legend-dot {
-        width: 8px; height: 8px; border-radius: 50%; background: #eca413;
-    }
-    .chart-legend span { font-size: 0.75rem; color: #9a804c; }
-
-    .chart-bars {
-        display: flex; align-items: flex-end; justify-content: space-between;
-        gap: 8px; height: 160px; padding: 0 8px;
-    }
-    .chart-bar {
-        flex: 1; border-radius: 6px 6px 0 0;
-        background: rgba(236,164,19,0.1); transition: background 0.2s;
-        cursor: pointer; position: relative;
-    }
-    .chart-bar:hover { background: rgba(236,164,19,0.25); }
-    .chart-bar.highlight {
-        background: #eca413;
-        box-shadow: 0 8px 24px -4px rgba(236,164,19,0.25);
-    }
-    .chart-labels {
-        display: flex; justify-content: space-between;
-        padding: 8px 8px 0; font-size: 0.75rem; color: #9a804c; font-weight: 500;
     }
 
     /* ===== Button Styles ===== */
@@ -736,13 +628,6 @@ def main():
 
         st.divider()
 
-        # New Crawl 버튼 — 실제로 스크래핑 탭으로 이동
-        if st.button("➕ New Crawl", key="sidebar_new_crawl", type="primary", use_container_width=True):
-            st.session_state.sidebar_page = "dashboard"
-            st.rerun()
-
-        st.markdown("<div style='flex:1'></div>", unsafe_allow_html=True)
-
         # 프로필 영역 — 앱 버전 정보 표시
         st.markdown("""
         <div class="sidebar-profile">
@@ -848,25 +733,42 @@ def main():
         """, unsafe_allow_html=True)
         st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
-        st.markdown('<div class="section-title"><span class="material-symbols-outlined" style="font-size:20px;color:#eca413;">key</span> API Key 설정</div>', unsafe_allow_html=True)
+        # ===== GPT-5.2 API 설정 =====
+        st.markdown('<div class="section-title"><span class="material-symbols-outlined" style="font-size:20px;color:#eca413;">smart_toy</span> GPT-5.2 API 설정</div>', unsafe_allow_html=True)
+
         current_key = st.session_state.openai_api_key
-        if current_key:
-            st.success(f"✅ API Key가 설정되어 있습니다. (마지막 4자리: ...{current_key[-4:]})")
+
+        if EXCEL_GENERATOR_AVAILABLE and OPENAI_AVAILABLE:
+            if current_key:
+                st.success(f"✅ API Key가 설정되어 있습니다. (마지막 4자리: ...{current_key[-4:]})")
+                st.caption("스크래핑 시 GPT-5.2가 데이터를 분석하여 요약 엑셀을 자동 생성합니다.")
+            else:
+                st.warning("⚠️ API Key가 설정되지 않았습니다.")
+                st.markdown("""
+                **설정 방법 (택 1):**
+                1. `.streamlit/secrets.toml` 파일에 `OPENAI_API_KEY = "sk-..."` 입력
+                2. 환경변수 `OPENAI_API_KEY` 설정
+                """)
         else:
-            st.warning("⚠️ API Key가 설정되지 않았습니다.")
-        st.markdown("""
-        **설정 방법:**
-        1. `.streamlit/secrets.toml` 파일에 `OPENAI_API_KEY = "sk-..."` 입력
-        2. 또는 환경변수 `OPENAI_API_KEY` 설정
-        """)
+            st.error("⚠️ GPT-5.2 기능을 사용하려면 openai 패키지가 필요합니다: `pip install openai>=2.0.0`")
 
         st.divider()
+
+        # ===== 앱 정보 =====
         st.markdown('<div class="section-title"><span class="material-symbols-outlined" style="font-size:20px;color:#eca413;">info</span> 앱 정보</div>', unsafe_allow_html=True)
         st.markdown("""
         **저축은행 공시자료 크롤링 시스템 v4.1**
         - 79개 저축은행 분기공시/결산공시 데이터 자동 수집
         - GPT-5.2 API를 활용한 AI 표 정리 및 엑셀 자동 생성
         - 통일경영공시/감사보고서 파일 일괄 다운로드
+
+        **사용 방법:**
+        1. Dashboard → 스크래핑 유형 선택 (분기공시/결산공시)
+        2. 은행 선택 (전체 또는 개별)
+        3. '스크래핑 시작' 클릭
+        4. 완료 후 결과 파일 다운로드
+        5. (선택) AI 표 정리 버튼으로 데이터 분석 엑셀 생성
+        6. (선택) 공시파일 일괄 다운로드로 원본 파일 수집
 
         **데이터 출처:** 저축은행중앙회 통일경영공시 (https://www.fsb.or.kr)
         """)
@@ -989,37 +891,9 @@ def main():
 
         st.divider()
 
-        # ========== GPT-5.2 API 설정 섹션 ==========
-        st.markdown('<div class="section-title"><span class="material-symbols-outlined" style="font-size:20px;color:#eca413;">smart_toy</span> GPT-5.2 API 설정 (엑셀 자동 생성)</div>', unsafe_allow_html=True)
-
-        if EXCEL_GENERATOR_AVAILABLE and OPENAI_AVAILABLE:
-            api_key = st.session_state.openai_api_key
-
-            col1, col2 = st.columns([2, 1])
-            with col1:
-                if api_key:
-                    st.success("✅ API Key가 설정되어 있습니다. (`.streamlit/secrets.toml` 또는 환경변수)")
-                else:
-                    st.warning(
-                        "⚠️ API Key가 설정되지 않았습니다.\n\n"
-                        "**설정 방법 (택 1):**\n"
-                        "1. `.streamlit/secrets.toml` 파일에 `OPENAI_API_KEY = \"sk-...\"` 입력\n"
-                        "2. 환경변수 `OPENAI_API_KEY` 설정"
-                    )
-
-            with col2:
-                use_chatgpt = st.checkbox(
-                    "🤖 GPT-5.2로 엑셀 생성",
-                    value=bool(api_key),
-                    disabled=not api_key,
-                    help="활성화하면 GPT-5.2가 데이터를 분석하여 요약 엑셀을 생성합니다."
-                )
-        else:
-            use_chatgpt = False
-            api_key = ""
-            st.warning("⚠️ GPT-5.2 기능을 사용하려면 openai 패키지가 필요합니다: `pip install openai>=2.0.0`")
-
-        st.divider()
+        # GPT 사용 여부는 Settings에서 설정된 API Key 기반으로 자동 판단
+        api_key = st.session_state.openai_api_key
+        use_chatgpt = bool(api_key) and EXCEL_GENERATOR_AVAILABLE and OPENAI_AVAILABLE
 
         # ========== 은행 선택 섹션 ==========
         st.markdown('<div class="section-title"><span class="material-symbols-outlined" style="font-size:20px;color:#eca413;">account_balance</span> 은행 선택</div>', unsafe_allow_html=True)
@@ -1184,7 +1058,7 @@ def main():
                                     st.error(f"AI 엑셀 생성 중 오류: {str(e)}")
             else:
                 if not st.session_state.openai_api_key:
-                    st.info("💡 `.streamlit/secrets.toml`에 API Key를 설정하면 AI 표 정리 기능을 사용할 수 있습니다.")
+                    st.info("💡 Settings 페이지에서 API Key를 설정하면 AI 표 정리 기능을 사용할 수 있습니다.")
                 elif not EXCEL_GENERATOR_AVAILABLE or not OPENAI_AVAILABLE:
                     st.info("💡 `pip install openai>=2.0.0` 설치 후 AI 표 정리 기능을 사용할 수 있습니다.")
 
@@ -1205,92 +1079,7 @@ def main():
                             type="primary"
                         )
         else:
-            # Show sample "Recent Crawling Activities" table when no results
-            st.markdown("""
-            <div style="border-radius:1rem; overflow:hidden; border:1px solid #e7dfcf; box-shadow:0 1px 3px rgba(0,0,0,0.05);">
-            <table class="custom-table" style="margin:0;">
-                <thead>
-                    <tr>
-                        <th>Bank Name</th>
-                        <th>Status</th>
-                        <th>Last Updated</th>
-                        <th>Records Found</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td>
-                            <div style="display:flex;align-items:center;gap:12px;">
-                                <div class="table-bank-avatar">OK</div>
-                                <span class="table-bank-name">OK Savings Bank</span>
-                            </div>
-                        </td>
-                        <td><span class="status-badge status-success"><span class="status-dot pulse"></span> Success</span></td>
-                        <td><div><span style="font-weight:500;">2023-10-27</span><br/><span style="font-size:0.75rem;color:#9a804c;">14:30:22</span></div></td>
-                        <td><span style="font-weight:700;">142</span> <span style="font-size:0.75rem;color:#9a804c;">items</span></td>
-                    </tr>
-                    <tr>
-                        <td>
-                            <div style="display:flex;align-items:center;gap:12px;">
-                                <div class="table-bank-avatar">SB</div>
-                                <span class="table-bank-name">SBI Savings Bank</span>
-                            </div>
-                        </td>
-                        <td><span class="status-badge status-running"><span class="material-symbols-outlined" style="font-size:14px;animation:spin 1s linear infinite;">sync</span> Running</span></td>
-                        <td><div><span style="font-weight:500;">2023-10-27</span><br/><span style="font-size:0.75rem;color:#9a804c;">14:25:10</span></div></td>
-                        <td><span style="font-weight:700;color:#9a804c;font-style:italic;">Pending...</span></td>
-                    </tr>
-                    <tr>
-                        <td>
-                            <div style="display:flex;align-items:center;gap:12px;">
-                                <div class="table-bank-avatar">WC</div>
-                                <span class="table-bank-name">Welcome Savings Bank</span>
-                            </div>
-                        </td>
-                        <td><span class="status-badge status-success"><span class="status-dot"></span> Success</span></td>
-                        <td><div><span style="font-weight:500;">2023-10-27</span><br/><span style="font-size:0.75rem;color:#9a804c;">13:15:00</span></div></td>
-                        <td><span style="font-weight:700;">98</span> <span style="font-size:0.75rem;color:#9a804c;">items</span></td>
-                    </tr>
-                    <tr>
-                        <td>
-                            <div style="display:flex;align-items:center;gap:12px;">
-                                <div class="table-bank-avatar">PP</div>
-                                <span class="table-bank-name">Pepper Savings Bank</span>
-                            </div>
-                        </td>
-                        <td><span class="status-badge status-failed"><span class="material-symbols-outlined" style="font-size:14px;">error</span> Failed</span></td>
-                        <td><div><span style="font-weight:500;">2023-10-27</span><br/><span style="font-size:0.75rem;color:#9a804c;">12:00:45</span></div></td>
-                        <td><span style="font-weight:700;color:#9a804c;">0</span> <span style="font-size:0.75rem;color:#9a804c;">items</span></td>
-                    </tr>
-                    <tr>
-                        <td>
-                            <div style="display:flex;align-items:center;gap:12px;">
-                                <div class="table-bank-avatar">KI</div>
-                                <span class="table-bank-name">Korea Investment</span>
-                            </div>
-                        </td>
-                        <td><span class="status-badge status-success"><span class="status-dot"></span> Success</span></td>
-                        <td><div><span style="font-weight:500;">2023-10-27</span><br/><span style="font-size:0.75rem;color:#9a804c;">11:45:12</span></div></td>
-                        <td><span style="font-weight:700;">210</span> <span style="font-size:0.75rem;color:#9a804c;">items</span></td>
-                    </tr>
-                </tbody>
-            </table>
-            </div>
-            """, unsafe_allow_html=True)
-            st.caption("💡 위 테이블은 샘플 데이터입니다. 은행을 선택하고 스크래핑을 실행하면 실제 결과가 표시됩니다.")
-
-        # ========== 로그 섹션 ==========
-        st.divider()
-        with st.expander("📝 실행 로그 보기", expanded=False):
-            if st.session_state.logs:
-                log_text = "\n".join(st.session_state.logs)
-                st.text_area("로그", value=log_text, height=300, disabled=True)
-
-                if st.button("🗑️ 로그 지우기"):
-                    st.session_state.logs = []
-                    st.rerun()
-            else:
-                st.info("로그가 없습니다.")
+            st.info("아직 스크래핑 결과가 없습니다. 은행을 선택하고 스크래핑을 실행하세요.")
 
     # ====================================================================
     # 탭 2: 경영공시/감사보고서 파일 다운로드
@@ -1386,95 +1175,7 @@ def main():
                 "- `downloader_core.py` 파일이 프로젝트 루트에 존재"
             )
 
-    # ========== Bottom Grid: System Logs + API Usage ==========
-    st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
-
-    bottom_col1, bottom_col2 = st.columns(2)
-
-    with bottom_col1:
-        # System Logs Card
-        log_entries = st.session_state.logs[-3:] if st.session_state.logs else []
-        log_html_items = ""
-        if log_entries:
-            for log_msg in log_entries:
-                # Determine icon based on log content
-                if "완료" in log_msg or "성공" in log_msg or "Success" in log_msg:
-                    icon = '<span class="material-symbols-outlined" style="font-size:16px;color:#078810;margin-top:2px;">check_circle</span>'
-                elif "오류" in log_msg or "실패" in log_msg or "Failed" in log_msg or "에러" in log_msg:
-                    icon = '<span class="material-symbols-outlined" style="font-size:16px;color:#d32f2f;margin-top:2px;">error</span>'
-                elif "경고" in log_msg or "Warning" in log_msg or "주의" in log_msg:
-                    icon = '<span class="material-symbols-outlined" style="font-size:16px;color:#e6a700;margin-top:2px;">warning</span>'
-                else:
-                    icon = '<span class="material-symbols-outlined" style="font-size:16px;color:#4a90d9;margin-top:2px;">info</span>'
-                log_html_items += f"""
-                <div class="log-item">
-                    {icon}
-                    <div>
-                        <p class="log-item-text">{log_msg[:80]}</p>
-                        <p class="log-item-time">Recent</p>
-                    </div>
-                </div>"""
-        else:
-            log_html_items = """
-            <div class="log-item">
-                <span class="material-symbols-outlined" style="font-size:16px;color:#078810;margin-top:2px;">check_circle</span>
-                <div>
-                    <p class="log-item-text">Cron job completed successfully</p>
-                    <p class="log-item-time">Today, 14:30 PM</p>
-                </div>
-            </div>
-            <div class="log-item">
-                <span class="material-symbols-outlined" style="font-size:16px;color:#e6a700;margin-top:2px;">warning</span>
-                <div>
-                    <p class="log-item-text">High latency detected on SBI crawler</p>
-                    <p class="log-item-time">Today, 14:22 PM</p>
-                </div>
-            </div>
-            <div class="log-item">
-                <span class="material-symbols-outlined" style="font-size:16px;color:#4a90d9;margin-top:2px;">info</span>
-                <div>
-                    <p class="log-item-text">System maintenance scheduled</p>
-                    <p class="log-item-time">Yesterday, 09:00 AM</p>
-                </div>
-            </div>"""
-
-        st.markdown(f"""
-        <div class="log-card">
-            <div class="log-card-header">
-                <h3>System Logs</h3>
-            </div>
-            {log_html_items}
-        </div>
-        """, unsafe_allow_html=True)
-        if st.button("📋 View All Logs", key="view_all_logs_btn", use_container_width=True):
-            st.session_state.sidebar_page = "logs"
-            st.rerun()
-
-    with bottom_col2:
-        # API Usage Chart Card
-        st.markdown("""
-        <div class="chart-card">
-            <div class="chart-header">
-                <h3>API Usage</h3>
-                <div class="chart-legend">
-                    <div class="chart-legend-dot"></div>
-                    <span>Requests</span>
-                </div>
-            </div>
-            <div class="chart-bars">
-                <div class="chart-bar" style="height:40%;"></div>
-                <div class="chart-bar" style="height:65%;"></div>
-                <div class="chart-bar" style="height:45%;"></div>
-                <div class="chart-bar" style="height:80%;"></div>
-                <div class="chart-bar highlight" style="height:95%;"></div>
-                <div class="chart-bar" style="height:50%;"></div>
-                <div class="chart-bar" style="height:60%;"></div>
-            </div>
-            <div class="chart-labels">
-                <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+    # (System Logs와 API Usage는 각각 Data Logs, Settings 페이지로 이동됨)
 
     # 하단 여백
     st.markdown("<div style='height:2rem'></div>", unsafe_allow_html=True)
