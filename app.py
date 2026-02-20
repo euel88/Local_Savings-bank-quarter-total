@@ -210,6 +210,8 @@ def init_session_state():
         st.session_state.summary_excel_path = None
     if 'ai_table_generated' not in st.session_state:
         st.session_state.ai_table_generated = False
+    if 'validation_result' not in st.session_state:
+        st.session_state.validation_result = None
 
 
 def main():
@@ -420,6 +422,9 @@ def main():
                 except Exception:
                     pass
 
+                # 정합성 검증 결과 표시
+                _display_validation_result(st.session_state.validation_result)
+
                 col1, col2, col3 = st.columns([1, 2, 1])
                 with col2:
                     with open(st.session_state.summary_excel_path, 'rb') as f:
@@ -437,17 +442,22 @@ def main():
                 col1, col2, col3 = st.columns([1, 2, 1])
                 with col2:
                     if st.button("🤖 AI로 표 정리 및 엑셀 생성", use_container_width=True, type="secondary"):
-                        with st.spinner("GPT-5.2가 데이터를 분석하여 표를 정리하는 중..."):
+                        with st.spinner("GPT-5.2가 데이터를 분석하고 정합성을 검증하는 중..."):
                             try:
-                                summary_path = generate_excel_with_chatgpt(
+                                gen_result = generate_excel_with_chatgpt(
                                     scraped_results=results,
                                     api_key=st.session_state.openai_api_key,
-                                    use_ai=True
+                                    use_ai=True,
+                                    validate=True
                                 )
+                                summary_path = gen_result.get("filepath") if isinstance(gen_result, dict) else gen_result
+                                validation = gen_result.get("validation") if isinstance(gen_result, dict) else None
+
                                 if summary_path:
                                     st.session_state.summary_excel_path = summary_path
+                                    st.session_state.validation_result = validation
                                     st.session_state.ai_table_generated = True
-                                    st.success("✅ AI 표 정리 및 엑셀 생성 완료!")
+                                    st.success("✅ AI 표 정리, 정합성 검증 및 엑셀 생성 완료!")
                                     st.rerun()
                                 else:
                                     st.error("엑셀 생성에 실패했습니다.")
@@ -522,6 +532,70 @@ def main():
         """)
 
 
+def _display_validation_result(validation):
+    """정합성 검증 결과를 UI에 표시"""
+    if not validation:
+        return
+
+    st.markdown("---")
+    st.markdown("#### 🔍 정합성 검증 결과")
+
+    score = validation.get("score", 0)
+    is_valid = validation.get("is_valid", False)
+    errors = validation.get("errors", [])
+    warnings = validation.get("warnings", [])
+
+    # 점수 및 판정 표시
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if score >= 80:
+            st.metric("정합성 점수", f"{score}점", delta="양호")
+        elif score >= 50:
+            st.metric("정합성 점수", f"{score}점", delta="주의", delta_color="off")
+        else:
+            st.metric("정합성 점수", f"{score}점", delta="미흡", delta_color="inverse")
+    with col2:
+        if is_valid:
+            st.metric("판정", "✅ 통과")
+        else:
+            st.metric("판정", "⚠️ 오류 있음")
+    with col3:
+        st.metric("오류/경고", f"{len(errors)}건 / {len(warnings)}건")
+
+    # AI 검증 요약
+    ai_summary = validation.get("ai_checks", {}).get("summary", "")
+    if ai_summary:
+        st.info(f"🤖 **AI 검증 요약:** {ai_summary}")
+
+    # 오류 목록
+    if errors:
+        with st.expander(f"❌ 오류 ({len(errors)}건)", expanded=True):
+            for err in errors:
+                st.error(f"• {err}")
+
+    # 경고 목록
+    if warnings:
+        with st.expander(f"⚠️ 경고 ({len(warnings)}건)", expanded=False):
+            for warn in warnings:
+                st.warning(f"• {warn}")
+
+    # 은행별 상세
+    details = validation.get("details", {})
+    if details:
+        with st.expander("📋 은행별 검증 상세", expanded=False):
+            detail_rows = []
+            for bank, detail in details.items():
+                status = detail.get("status", "unknown")
+                status_icon = {"pass": "✅", "warn": "⚠️", "fail": "❌"}.get(status, "❓")
+                issues = ", ".join(detail.get("issues", [])) or "이상 없음"
+                detail_rows.append({"은행명": bank, "판정": f"{status_icon} {status}", "상세": issues})
+            if detail_rows:
+                st.dataframe(pd.DataFrame(detail_rows), use_container_width=True, hide_index=True)
+
+    # 검증 시트 안내
+    st.caption("💡 엑셀 파일의 '정합성검증' 시트에서 전체 검증 결과를 확인할 수 있습니다.")
+
+
 def run_scraping(selected_banks, scrape_type, auto_zip, download_filename, use_chatgpt=False, api_key=None):
     """스크래핑 실행"""
     st.session_state.scraping_running = True
@@ -529,6 +603,7 @@ def run_scraping(selected_banks, scrape_type, auto_zip, download_filename, use_c
     st.session_state.logs = []
     st.session_state.bank_dates = {}
     st.session_state.summary_excel_path = None
+    st.session_state.validation_result = None
 
     start_time = time.time()
 
@@ -600,21 +675,37 @@ def run_scraping(selected_banks, scrape_type, auto_zip, download_filename, use_c
                 st.session_state.zip_path = zip_path
                 logger.log_message(f"ZIP 파일 생성 완료")
 
-        # GPT-5.2로 분기총괄 엑셀 생성
+        # GPT-5.2로 분기총괄 엑셀 생성 및 정합성 검증
         if use_chatgpt and api_key and EXCEL_GENERATOR_AVAILABLE:
-            status_text.markdown("**🤖 GPT-5.2가 분기총괄 엑셀 생성 중...**")
-            logger.log_message("GPT-5.2 API로 분기총괄 엑셀 생성 시작")
+            status_text.markdown("**🤖 GPT-5.2가 분기총괄 엑셀 생성 및 정합성 검증 중...**")
+            logger.log_message("GPT-5.2 API로 분기총괄 엑셀 생성 및 정합성 검증 시작")
 
             try:
-                summary_excel_path = generate_excel_with_chatgpt(
+                gen_result = generate_excel_with_chatgpt(
                     scraped_results=results,
                     api_key=api_key,
-                    use_ai=True
+                    use_ai=True,
+                    validate=True
                 )
+                summary_excel_path = gen_result.get("filepath") if isinstance(gen_result, dict) else gen_result
+                validation = gen_result.get("validation") if isinstance(gen_result, dict) else None
+
                 if summary_excel_path:
                     st.session_state.summary_excel_path = summary_excel_path
+                    st.session_state.validation_result = validation
                     st.session_state.ai_table_generated = True
                     logger.log_message("GPT-5.2 분기총괄 엑셀 생성 완료")
+
+                    if validation:
+                        score = validation.get("score", 0)
+                        error_count = len(validation.get("errors", []))
+                        warn_count = len(validation.get("warnings", []))
+                        logger.log_message(
+                            f"정합성 검증 완료 - 점수: {score}/100, "
+                            f"오류: {error_count}건, 경고: {warn_count}건"
+                        )
+                        if not validation.get("is_valid"):
+                            logger.log_message("⚠️ 정합성 검증에서 오류가 발견되었습니다. 결과를 확인하세요.")
             except Exception as e:
                 logger.log_message(f"AI 엑셀 생성 오류: {str(e)}")
                 st.warning(f"⚠️ AI 엑셀 생성 중 오류 발생: {str(e)}")
@@ -628,6 +719,9 @@ def run_scraping(selected_banks, scrape_type, auto_zip, download_filename, use_c
         completion_msg = f"🎉 스크래핑 완료! 성공: {success_count}개, 실패: {total_banks - success_count}개, 소요시간: {format_elapsed_time(final_elapsed)}"
         if st.session_state.summary_excel_path:
             completion_msg += " | 🤖 GPT-5.2 엑셀 생성 완료"
+            if st.session_state.validation_result:
+                v_score = st.session_state.validation_result.get("score", 0)
+                completion_msg += f" | 🔍 정합성: {v_score}점"
         st.success(completion_msg)
         st.session_state.logs = logger.messages.copy()
 
