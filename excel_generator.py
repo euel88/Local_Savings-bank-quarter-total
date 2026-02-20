@@ -209,17 +209,21 @@ JSON 형식 예시:
     def generate_summary_excel(
         self,
         scraped_results: List[Dict[str, Any]],
-        output_path: Optional[str] = None
-    ) -> str:
+        output_path: Optional[str] = None,
+        validate: bool = True
+    ) -> Dict[str, Any]:
         """
-        스크래핑 결과를 요약 엑셀로 생성
+        스크래핑 결과를 요약 엑셀로 생성하고 정합성 검증
 
         Args:
             scraped_results: 스크래핑 결과 리스트
             output_path: 출력 파일 경로 (None이면 임시 파일)
+            validate: 정합성 검증 수행 여부
 
         Returns:
-            생성된 엑셀 파일 경로
+            딕셔너리:
+                - filepath: 생성된 엑셀 파일 경로
+                - validation: 정합성 검증 결과 (validate=True인 경우)
         """
         # 데이터 분석 및 포맷팅
         df = self.analyze_and_format_data(scraped_results)
@@ -230,6 +234,11 @@ JSON 형식 예시:
                 tempfile.gettempdir(),
                 f"저축은행_분기총괄_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
             )
+
+        # 정합성 검증
+        validation_result = None
+        if validate:
+            validation_result = self.validate_excel_data(df, scraped_results)
 
         # 엑셀 파일 생성
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
@@ -246,7 +255,274 @@ JSON 형식 예시:
                 ) + 2
                 worksheet.column_dimensions[chr(65 + idx)].width = min(max_length, 20)
 
-        return output_path
+            # 검증 결과를 별도 시트에 기록
+            if validation_result:
+                val_data = []
+                val_data.append({"항목": "정합성 점수", "결과": f"{validation_result['score']}점 / 100점"})
+                val_data.append({"항목": "전체 판정", "결과": "통과" if validation_result['is_valid'] else "오류 있음"})
+                val_data.append({"항목": "", "결과": ""})
+
+                if validation_result.get("ai_checks", {}).get("summary"):
+                    val_data.append({"항목": "AI 검증 요약", "결과": validation_result["ai_checks"]["summary"]})
+                    val_data.append({"항목": "", "결과": ""})
+
+                if validation_result["errors"]:
+                    val_data.append({"항목": "=== 오류 ===", "결과": ""})
+                    for err in validation_result["errors"]:
+                        val_data.append({"항목": "오류", "결과": err})
+
+                if validation_result["warnings"]:
+                    val_data.append({"항목": "=== 경고 ===", "결과": ""})
+                    for warn in validation_result["warnings"]:
+                        val_data.append({"항목": "경고", "결과": warn})
+
+                # 은행별 상세 결과
+                if validation_result.get("details"):
+                    val_data.append({"항목": "", "결과": ""})
+                    val_data.append({"항목": "=== 은행별 상세 ===", "결과": ""})
+                    for bank, detail in validation_result["details"].items():
+                        status = detail.get("status", "unknown")
+                        issues = ", ".join(detail.get("issues", []))
+                        val_data.append({"항목": f"{bank} [{status}]", "결과": issues if issues else "이상 없음"})
+
+                val_df = pd.DataFrame(val_data)
+                val_df.to_excel(writer, sheet_name='정합성검증', index=False)
+
+                ws_val = writer.sheets['정합성검증']
+                ws_val.column_dimensions['A'].width = 25
+                ws_val.column_dimensions['B'].width = 60
+
+        return {
+            "filepath": output_path,
+            "validation": validation_result
+        }
+
+    def validate_excel_data(self, df: pd.DataFrame, scraped_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        ChatGPT를 사용하여 생성된 엑셀 데이터의 정합성 검증
+
+        Args:
+            df: 검증할 DataFrame
+            scraped_results: 원본 스크래핑 결과 리스트
+
+        Returns:
+            검증 결과 딕셔너리:
+                - is_valid: 전체 정합성 통과 여부
+                - score: 정합성 점수 (0~100)
+                - errors: 오류 목록
+                - warnings: 경고 목록
+                - details: 은행별 상세 검증 결과
+        """
+        # 1단계: 로컬 규칙 기반 검증
+        local_result = self._validate_local_rules(df)
+
+        # 2단계: ChatGPT API를 활용한 교차 검증
+        ai_result = self._validate_with_ai(df, scraped_results)
+
+        # 결과 종합
+        all_errors = local_result.get("errors", []) + ai_result.get("errors", [])
+        all_warnings = local_result.get("warnings", []) + ai_result.get("warnings", [])
+
+        # 정합성 점수 계산
+        total_cells = len(df) * (len(df.columns) - 2)  # No, 은행명 제외
+        error_penalty = len(all_errors) * 10
+        warning_penalty = len(all_warnings) * 3
+        score = max(0, min(100, 100 - error_penalty - warning_penalty))
+
+        return {
+            "is_valid": len(all_errors) == 0,
+            "score": score,
+            "errors": all_errors,
+            "warnings": all_warnings,
+            "details": ai_result.get("details", {}),
+            "local_checks": local_result,
+            "ai_checks": ai_result
+        }
+
+    def _validate_local_rules(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """
+        로컬 규칙 기반 정합성 검증 (API 호출 없이)
+
+        검증 항목:
+            - 필수 컬럼 존재 여부
+            - 데이터 타입 적합성 (숫자 필드에 숫자가 있는지)
+            - 값 범위 적정성 (비율은 0~100%, 자산은 양수 등)
+            - 빈 값(결측치) 비율
+            - 은행 번호(No) 연속성
+        """
+        errors = []
+        warnings = []
+
+        # 1. 필수 컬럼 검증
+        expected_cols = set(self.config.EXCEL_COLUMNS)
+        actual_cols = set(df.columns.tolist())
+        missing_cols = expected_cols - actual_cols
+        if missing_cols:
+            errors.append(f"누락된 컬럼: {', '.join(missing_cols)}")
+
+        # 2. 빈 DataFrame 검증
+        if df.empty:
+            errors.append("데이터가 비어 있습니다.")
+            return {"errors": errors, "warnings": warnings}
+
+        # 3. No 컬럼 연속성 검증
+        if "No" in df.columns:
+            no_values = df["No"].dropna().tolist()
+            expected_no = list(range(1, len(no_values) + 1))
+            if no_values != expected_no:
+                warnings.append(f"순번(No)이 연속적이지 않습니다: {no_values}")
+
+        # 4. 은행명 중복 검증
+        if "은행명" in df.columns:
+            duplicates = df["은행명"].dropna()
+            dup_names = duplicates[duplicates.duplicated()].tolist()
+            if dup_names:
+                errors.append(f"중복된 은행명: {', '.join(dup_names)}")
+
+        # 5. 숫자 필드 검증
+        numeric_cols = ["자산(최근분기)", "이익(최근분기)", "순이익",
+                        "누자본(최근분기신)", "최근분기", "신(최근분기)"]
+        ratio_cols = ["기자본비", "위하여신비"]
+
+        for col in numeric_cols:
+            if col not in df.columns:
+                continue
+            for idx, val in df[col].items():
+                if val == "" or val is None or (isinstance(val, float) and pd.isna(val)):
+                    bank_name = df.at[idx, "은행명"] if "은행명" in df.columns else f"행 {idx}"
+                    warnings.append(f"{bank_name}: '{col}' 값이 비어 있습니다.")
+                elif isinstance(val, (int, float)):
+                    if col in ["자산(최근분기)", "누자본(최근분기신)"] and val < 0:
+                        bank_name = df.at[idx, "은행명"] if "은행명" in df.columns else f"행 {idx}"
+                        errors.append(f"{bank_name}: '{col}' 값이 음수입니다 ({val}).")
+
+        # 6. 비율 필드 범위 검증 (0~100%)
+        for col in ratio_cols:
+            if col not in df.columns:
+                continue
+            for idx, val in df[col].items():
+                if isinstance(val, (int, float)) and not pd.isna(val):
+                    if val < 0 or val > 100:
+                        bank_name = df.at[idx, "은행명"] if "은행명" in df.columns else f"행 {idx}"
+                        errors.append(f"{bank_name}: '{col}' 비율값이 범위(0~100%)를 벗어났습니다 ({val}%).")
+
+        # 7. 결측치 비율 확인
+        data_cols = numeric_cols + ratio_cols
+        existing_data_cols = [c for c in data_cols if c in df.columns]
+        if existing_data_cols:
+            empty_count = 0
+            total_count = 0
+            for col in existing_data_cols:
+                for val in df[col]:
+                    total_count += 1
+                    if val == "" or val is None or (isinstance(val, float) and pd.isna(val)):
+                        empty_count += 1
+            if total_count > 0:
+                empty_ratio = empty_count / total_count * 100
+                if empty_ratio > 50:
+                    warnings.append(f"전체 데이터의 {empty_ratio:.1f}%가 비어 있습니다. 원본 데이터를 확인하세요.")
+
+        return {"errors": errors, "warnings": warnings}
+
+    def _validate_with_ai(self, df: pd.DataFrame, scraped_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        ChatGPT API를 활용한 교차 검증
+
+        원본 스크래핑 데이터와 생성된 엑셀 데이터를 비교하여
+        값이 올바르게 추출되었는지 검증
+        """
+        errors = []
+        warnings = []
+        details = {}
+
+        # 원본 데이터 요약 생성
+        source_summaries = []
+        for result in scraped_results:
+            if not result.get('success'):
+                continue
+            bank_name = result.get('bank', '알 수 없음')
+            filepath = result.get('filepath')
+            if filepath:
+                bank_data = self._read_excel_data(filepath)
+                if bank_data:
+                    source_summaries.append({
+                        "bank": bank_name,
+                        "source_data": json.dumps(bank_data, ensure_ascii=False, default=str)[:2000]
+                    })
+
+        if not source_summaries:
+            warnings.append("원본 데이터를 읽을 수 없어 AI 교차 검증을 건너뜁니다.")
+            return {"errors": errors, "warnings": warnings, "details": details}
+
+        # 생성된 데이터 문자열화
+        generated_data_str = df.to_string()
+
+        prompt = f"""
+다음은 저축은행 재무 데이터의 정합성 검증 요청입니다.
+
+[생성된 엑셀 데이터]
+{generated_data_str}
+
+[원본 스크래핑 데이터 (은행별)]
+{json.dumps(source_summaries, ensure_ascii=False, default=str)[:6000]}
+
+아래 항목을 검증하고 결과를 JSON으로 반환하세요:
+
+1. 원본 데이터와 생성된 데이터의 수치가 일치하는지 확인
+2. 각 은행의 데이터가 올바른 행에 배치되었는지 확인
+3. 단위가 일관적인지 확인 (억원, % 등)
+4. 논리적 모순이 없는지 확인 (예: 순이익이 총이익보다 큰 경우)
+5. 이상치(극단적으로 크거나 작은 값)가 있는지 확인
+
+JSON 형식:
+{{
+    "errors": ["심각한 오류 목록"],
+    "warnings": ["경고 목록"],
+    "bank_details": {{
+        "은행명": {{
+            "status": "pass|warn|fail",
+            "issues": ["발견된 문제"]
+        }}
+    }},
+    "summary": "전체 검증 요약 (1~2문장)"
+}}
+"""
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.config.MODEL,
+                messages=[
+                    {"role": "system", "content": "당신은 금융 데이터 품질 검증 전문가입니다. 원본 데이터와 가공 데이터를 비교하여 정합성을 검증합니다. 반드시 JSON 형식으로만 응답하세요."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=self.config.MAX_TOKENS,
+                temperature=self.config.TEMPERATURE
+            )
+
+            result_text = response.choices[0].message.content.strip()
+
+            # JSON 추출
+            if "```json" in result_text:
+                result_text = result_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in result_text:
+                result_text = result_text.split("```")[1].split("```")[0].strip()
+
+            validation = json.loads(result_text)
+
+            errors.extend(validation.get("errors", []))
+            warnings.extend(validation.get("warnings", []))
+            details = validation.get("bank_details", {})
+
+            return {
+                "errors": errors,
+                "warnings": warnings,
+                "details": details,
+                "summary": validation.get("summary", "")
+            }
+
+        except Exception as e:
+            warnings.append(f"AI 검증 API 호출 실패: {str(e)}")
+            return {"errors": errors, "warnings": warnings, "details": details}
 
     def process_with_ai_instructions(
         self,
@@ -505,23 +781,28 @@ def generate_excel_with_chatgpt(
     scraped_results: List[Dict[str, Any]],
     api_key: Optional[str] = None,
     output_path: Optional[str] = None,
-    use_ai: bool = True
-) -> str:
+    use_ai: bool = True,
+    validate: bool = True
+) -> Dict[str, Any]:
     """
-    편의 함수: 스크래핑 결과로 엑셀 생성
+    편의 함수: 스크래핑 결과로 엑셀 생성 및 정합성 검증
 
     Args:
         scraped_results: 스크래핑 결과 리스트
         api_key: OpenAI API 키
         output_path: 출력 파일 경로
         use_ai: ChatGPT 사용 여부
+        validate: 정합성 검증 수행 여부 (use_ai=True일 때만 동작)
 
     Returns:
-        생성된 엑셀 파일 경로
+        딕셔너리:
+            - filepath: 생성된 엑셀 파일 경로
+            - validation: 정합성 검증 결과 (use_ai=True이고 validate=True인 경우)
     """
     if use_ai and OPENAI_AVAILABLE and api_key:
         generator = ChatGPTExcelGenerator(api_key=api_key)
-        return generator.generate_summary_excel(scraped_results, output_path)
+        return generator.generate_summary_excel(scraped_results, output_path, validate=validate)
     else:
         generator = DirectExcelGenerator()
-        return generator.create_from_scraped_data(scraped_results, output_path)
+        filepath = generator.create_from_scraped_data(scraped_results, output_path)
+        return {"filepath": filepath, "validation": None}
