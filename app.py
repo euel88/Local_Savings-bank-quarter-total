@@ -425,8 +425,225 @@ st.markdown("""
     }
     [data-testid="stMetricLabel"] { color: #9a804c; }
     [data-testid="stMetricValue"] { color: #1b170d; font-weight: 900; }
+
+    /* ===== Folder Browser ===== */
+    .folder-browser-panel {
+        background: #ffffff;
+        border: 1px solid #e7dfcf;
+        border-radius: 12px;
+        padding: 1rem;
+        margin-top: 0.5rem;
+    }
+    .folder-browser-path {
+        display: flex; align-items: center; gap: 8px;
+        padding: 8px 12px;
+        background: #fcfaf8;
+        border: 1px solid #e7dfcf;
+        border-radius: 8px;
+        font-size: 0.8rem;
+        color: #1b170d;
+        font-family: 'Manrope', monospace;
+        word-break: break-all;
+        margin-bottom: 0.75rem;
+    }
+    .folder-browser-path .material-symbols-outlined {
+        color: #eca413; font-size: 18px; flex-shrink: 0;
+    }
+    .folder-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+        gap: 6px;
+        max-height: 240px;
+        overflow-y: auto;
+        padding: 4px;
+    }
+    .folder-item {
+        display: flex; align-items: center; gap: 6px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid transparent;
+        font-size: 0.8rem;
+        font-weight: 500;
+        color: #1b170d;
+        cursor: pointer;
+        transition: all 0.15s;
+        background: #fcfaf8;
+        text-decoration: none;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+    }
+    .folder-item:hover {
+        background: #f3efe7;
+        border-color: #e7dfcf;
+    }
+    .folder-item .material-symbols-outlined {
+        color: #eca413; font-size: 18px; flex-shrink: 0;
+    }
+    .folder-selected-display {
+        display: flex; align-items: center; gap: 8px;
+        padding: 10px 14px;
+        background: #fcfaf8;
+        border: 1px solid #e7dfcf;
+        border-radius: 10px;
+        font-size: 0.85rem;
+        color: #1b170d;
+        min-height: 42px;
+    }
+    .folder-selected-display .material-symbols-outlined {
+        color: #eca413; font-size: 20px; flex-shrink: 0;
+    }
+    .folder-selected-display .path-text {
+        flex: 1;
+        word-break: break-all;
+        font-family: 'Manrope', monospace;
+        font-weight: 500;
+    }
+    .folder-selected-display .placeholder-text {
+        flex: 1; color: #9a804c; font-style: italic;
+    }
 </style>
 """, unsafe_allow_html=True)
+
+
+def folder_picker(key_prefix, label="📂 파일 저장 경로"):
+    """인터랙티브 폴더 브라우저 위젯
+
+    Args:
+        key_prefix: 세션 상태 키 접두어 (고유해야 함)
+        label: 위젯 라벨
+
+    Returns:
+        선택된 폴더 경로 (str) 또는 빈 문자열
+    """
+    # 세션 상태 키
+    browse_key = f"{key_prefix}_browsing"
+    nav_key = f"{key_prefix}_nav_path"
+    selected_key = f"{key_prefix}_selected"
+
+    if browse_key not in st.session_state:
+        st.session_state[browse_key] = False
+    if nav_key not in st.session_state:
+        st.session_state[nav_key] = os.path.expanduser("~")
+    if selected_key not in st.session_state:
+        st.session_state[selected_key] = ""
+
+    selected_path = st.session_state[selected_key]
+
+    # 선택된 경로 표시 + 찾아보기 버튼
+    col_display, col_btn = st.columns([5, 1])
+    with col_display:
+        st.markdown(f"**{label}**", unsafe_allow_html=True)
+        if selected_path:
+            st.markdown(f"""
+            <div class="folder-selected-display">
+                <span class="material-symbols-outlined">folder</span>
+                <span class="path-text">{selected_path}</span>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div class="folder-selected-display">
+                <span class="material-symbols-outlined">folder_open</span>
+                <span class="placeholder-text">폴더를 선택하세요 (비워두면 임시 폴더 사용)</span>
+            </div>
+            """, unsafe_allow_html=True)
+    with col_btn:
+        st.markdown("<div style='height:1.5rem'></div>", unsafe_allow_html=True)
+        browse_label = "📂 찾아보기" if not st.session_state[browse_key] else "✕ 닫기"
+        if st.button(browse_label, key=f"{key_prefix}_toggle_btn", use_container_width=True):
+            st.session_state[browse_key] = not st.session_state[browse_key]
+            st.rerun()
+
+    # 폴더 브라우저 패널
+    if st.session_state[browse_key]:
+        current = st.session_state[nav_key]
+
+        st.markdown('<div class="folder-browser-panel">', unsafe_allow_html=True)
+
+        # 현재 경로 표시
+        st.markdown(f"""
+        <div class="folder-browser-path">
+            <span class="material-symbols-outlined">location_on</span>
+            {current}
+        </div>
+        """, unsafe_allow_html=True)
+
+        # 네비게이션 버튼
+        nav_c1, nav_c2, nav_c3, nav_c4 = st.columns([1, 1, 1, 2])
+        with nav_c1:
+            if st.button("⬆️ 상위 폴더", key=f"{key_prefix}_up", use_container_width=True):
+                parent = os.path.dirname(current)
+                if parent != current:
+                    st.session_state[nav_key] = parent
+                    st.rerun()
+        with nav_c2:
+            if st.button("🏠 홈", key=f"{key_prefix}_home", use_container_width=True):
+                st.session_state[nav_key] = os.path.expanduser("~")
+                st.rerun()
+        with nav_c3:
+            if st.button("💾 루트", key=f"{key_prefix}_root", use_container_width=True):
+                st.session_state[nav_key] = "/"
+                st.rerun()
+        with nav_c4:
+            if st.button("✅ 이 폴더 선택", key=f"{key_prefix}_select", type="primary", use_container_width=True):
+                st.session_state[selected_key] = current
+                st.session_state[browse_key] = False
+                st.rerun()
+
+        # 하위 폴더 목록
+        try:
+            entries = sorted(os.listdir(current))
+            dirs = [e for e in entries if os.path.isdir(os.path.join(current, e)) and not e.startswith('.')]
+
+            if dirs:
+                cols_per_row = 4
+                for i in range(0, len(dirs), cols_per_row):
+                    cols = st.columns(cols_per_row)
+                    for j, d in enumerate(dirs[i:i + cols_per_row]):
+                        with cols[j]:
+                            if st.button(f"📁 {d}", key=f"{key_prefix}_d_{i + j}", use_container_width=True):
+                                st.session_state[nav_key] = os.path.join(current, d)
+                                st.rerun()
+            else:
+                st.caption("📭 하위 폴더가 없습니다.")
+        except PermissionError:
+            st.error("🔒 접근 권한이 없습니다. 다른 폴더를 선택하세요.")
+        except OSError as e:
+            st.error(f"폴더를 읽을 수 없습니다: {e}")
+
+        # 새 폴더 만들기
+        new_c1, new_c2 = st.columns([3, 1])
+        with new_c1:
+            new_folder_name = st.text_input(
+                "새 폴더 이름",
+                placeholder="새 폴더명을 입력하세요",
+                key=f"{key_prefix}_new_name",
+                label_visibility="collapsed"
+            )
+        with new_c2:
+            if st.button("📁+ 새 폴더", key=f"{key_prefix}_mkdir", use_container_width=True):
+                if new_folder_name:
+                    new_path = os.path.join(current, new_folder_name)
+                    try:
+                        os.makedirs(new_path, exist_ok=True)
+                        st.session_state[nav_key] = new_path
+                        st.rerun()
+                    except OSError as e:
+                        st.error(f"폴더 생성 실패: {e}")
+                else:
+                    st.warning("폴더 이름을 입력하세요.")
+
+        # 선택 해제 버튼
+        if selected_path:
+            if st.button("🗑️ 선택 해제 (임시 폴더 사용)", key=f"{key_prefix}_clear", use_container_width=True):
+                st.session_state[selected_key] = ""
+                st.session_state[browse_key] = False
+                st.rerun()
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    return st.session_state[selected_key]
 
 
 def format_elapsed_time(seconds):
@@ -482,6 +699,10 @@ def main():
     init_session_state()
 
     # ========== Sidebar ==========
+    # 사이드바 페이지 상태 초기화
+    if 'sidebar_page' not in st.session_state:
+        st.session_state.sidebar_page = "dashboard"
+
     with st.sidebar:
         st.markdown("""
         <div class="sidebar-brand">
@@ -495,46 +716,34 @@ def main():
         </div>
         """, unsafe_allow_html=True)
 
-        st.markdown("""
-        <nav class="sidebar-nav">
-            <a class="active" href="#">
-                <span class="material-symbols-outlined" style="font-size:20px;">dashboard</span>
-                Dashboard
-            </a>
-            <a href="#">
-                <span class="material-symbols-outlined" style="font-size:20px;">tune</span>
-                Crawler Config
-            </a>
-            <a href="#">
-                <span class="material-symbols-outlined" style="font-size:20px;">description</span>
-                Data Logs
-            </a>
-            <a href="#">
-                <span class="material-symbols-outlined" style="font-size:20px;">analytics</span>
-                Reports
-            </a>
-        </nav>
-        <hr style="border:none; border-top:1px solid #e7dfcf; margin:12px 0;">
-        <nav class="sidebar-nav">
-            <a href="#">
-                <span class="material-symbols-outlined" style="font-size:20px;">settings</span>
-                Settings
-            </a>
-        </nav>
-        """, unsafe_allow_html=True)
+        # 기능이 있는 네비게이션 라디오 버튼
+        page = st.radio(
+            "Navigation",
+            options=["Dashboard", "Crawler Config", "Data Logs", "Reports", "Settings"],
+            index=["dashboard", "config", "logs", "reports", "settings"].index(st.session_state.sidebar_page)
+                   if st.session_state.sidebar_page in ["dashboard", "config", "logs", "reports", "settings"] else 0,
+            key="sidebar_nav_radio",
+            label_visibility="collapsed"
+        )
+        page_map = {
+            "Dashboard": "dashboard",
+            "Crawler Config": "config",
+            "Data Logs": "logs",
+            "Reports": "reports",
+            "Settings": "settings"
+        }
+        st.session_state.sidebar_page = page_map.get(page, "dashboard")
 
-        st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
+        st.divider()
 
-        # New Crawl button (Streamlit button for actual functionality)
-        st.markdown("""
-        <div style="padding:0 0 1rem 0;">
-            <div class="sidebar-cta">
-                <span class="material-symbols-outlined" style="font-size:20px;">add_circle</span>
-                New Crawl
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        # New Crawl 버튼 — 실제로 스크래핑 탭으로 이동
+        if st.button("➕ New Crawl", key="sidebar_new_crawl", type="primary", use_container_width=True):
+            st.session_state.sidebar_page = "dashboard"
+            st.rerun()
 
+        st.markdown("<div style='flex:1'></div>", unsafe_allow_html=True)
+
+        # 프로필 영역 — 앱 버전 정보 표시
         st.markdown("""
         <div class="sidebar-profile">
             <div class="sidebar-profile-avatar">
@@ -547,7 +756,123 @@ def main():
         </div>
         """, unsafe_allow_html=True)
 
-    # ========== Main Content Header ==========
+    # ========== 페이지별 콘텐츠 라우팅 ==========
+    current_page = st.session_state.sidebar_page
+
+    # --- Crawler Config 페이지: 데이터 스크래핑 탭으로 바로 이동 ---
+    if current_page == "config":
+        st.session_state.sidebar_page = "dashboard"
+        current_page = "dashboard"
+
+    # --- Data Logs 페이지 ---
+    if current_page == "logs":
+        st.markdown("""
+        <div class="dashboard-header">
+            <h2>Data Logs</h2>
+            <p>View all crawling and system logs.</p>
+        </div>
+        """, unsafe_allow_html=True)
+        st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+
+        if st.session_state.logs:
+            log_text = "\n".join(st.session_state.logs)
+            st.text_area("스크래핑 실행 로그", value=log_text, height=400, disabled=True)
+            if st.button("🗑️ 로그 지우기", key="clear_logs_page"):
+                st.session_state.logs = []
+                st.rerun()
+        else:
+            st.info("📋 아직 로그가 없습니다. 스크래핑을 실행하면 여기에 로그가 표시됩니다.")
+
+        if st.session_state.disclosure_logs:
+            st.divider()
+            log_text_dl = "\n".join(st.session_state.disclosure_logs)
+            st.text_area("공시파일 다운로드 로그", value=log_text_dl, height=300, disabled=True)
+        return
+
+    # --- Reports 페이지 ---
+    if current_page == "reports":
+        st.markdown("""
+        <div class="dashboard-header">
+            <h2>Reports</h2>
+            <p>View and download generated reports and Excel files.</p>
+        </div>
+        """, unsafe_allow_html=True)
+        st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+
+        if st.session_state.results:
+            results = st.session_state.results
+            success_count = sum(1 for r in results if r['success'])
+            fail_count = len(results) - success_count
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("전체", f"{len(results)}개")
+            with col2:
+                st.metric("성공", f"{success_count}개")
+            with col3:
+                st.metric("실패", f"{fail_count}개")
+
+            df = create_summary_dataframe(results, st.session_state.bank_dates)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+
+            # 엑셀 다운로드
+            if st.session_state.summary_excel_path and os.path.exists(st.session_state.summary_excel_path):
+                with open(st.session_state.summary_excel_path, 'rb') as f:
+                    st.download_button(
+                        label="📊 분기총괄 엑셀 다운로드",
+                        data=f,
+                        file_name=f"저축은행_분기총괄_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+            if 'zip_path' in st.session_state and st.session_state.zip_path and os.path.exists(st.session_state.zip_path):
+                with open(st.session_state.zip_path, 'rb') as f:
+                    st.download_button(
+                        label="📥 전체 데이터 ZIP 다운로드",
+                        data=f,
+                        file_name=f"저축은행_데이터_{datetime.now().strftime('%Y%m%d')}.zip",
+                        mime="application/zip",
+                        use_container_width=True
+                    )
+        else:
+            st.info("📋 아직 보고서가 없습니다. 스크래핑을 실행하면 여기에 결과가 표시됩니다.")
+        return
+
+    # --- Settings 페이지 ---
+    if current_page == "settings":
+        st.markdown("""
+        <div class="dashboard-header">
+            <h2>Settings</h2>
+            <p>System configuration and API key management.</p>
+        </div>
+        """, unsafe_allow_html=True)
+        st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+
+        st.markdown('<div class="section-title"><span class="material-symbols-outlined" style="font-size:20px;color:#eca413;">key</span> API Key 설정</div>', unsafe_allow_html=True)
+        current_key = st.session_state.openai_api_key
+        if current_key:
+            st.success(f"✅ API Key가 설정되어 있습니다. (마지막 4자리: ...{current_key[-4:]})")
+        else:
+            st.warning("⚠️ API Key가 설정되지 않았습니다.")
+        st.markdown("""
+        **설정 방법:**
+        1. `.streamlit/secrets.toml` 파일에 `OPENAI_API_KEY = "sk-..."` 입력
+        2. 또는 환경변수 `OPENAI_API_KEY` 설정
+        """)
+
+        st.divider()
+        st.markdown('<div class="section-title"><span class="material-symbols-outlined" style="font-size:20px;color:#eca413;">info</span> 앱 정보</div>', unsafe_allow_html=True)
+        st.markdown("""
+        **저축은행 공시자료 크롤링 시스템 v4.1**
+        - 79개 저축은행 분기공시/결산공시 데이터 자동 수집
+        - GPT-5.2 API를 활용한 AI 표 정리 및 엑셀 자동 생성
+        - 통일경영공시/감사보고서 파일 일괄 다운로드
+
+        **데이터 출처:** 저축은행중앙회 통일경영공시 (https://www.fsb.or.kr)
+        """)
+        return
+
+    # ========== Dashboard 페이지 (기본) ==========
     st.markdown("""
     <div class="dashboard-header">
         <h2>Dashboard Overview</h2>
@@ -653,27 +978,13 @@ def main():
                 help="다운로드할 ZIP 파일의 이름을 지정하세요"
             )
 
-        col3, col4 = st.columns([2, 1])
+        scraping_save_path = folder_picker("scraping_path", label="📂 스크래핑 파일 저장 경로")
+        st.session_state.scraping_save_path = scraping_save_path
 
+        col3, col4 = st.columns([1, 1])
         with col3:
-            scraping_save_path = st.text_input(
-                "📂 파일 저장 경로",
-                value=st.session_state.scraping_save_path,
-                placeholder="예: /home/user/Downloads/scraping_data",
-                help="스크래핑 결과 파일이 저장될 폴더 경로를 지정하세요. 비워두면 임시 폴더에 저장됩니다.",
-                key="scraping_save_path_input"
-            )
-            st.session_state.scraping_save_path = scraping_save_path
-            if scraping_save_path:
-                if os.path.isdir(scraping_save_path):
-                    st.caption("✅ 유효한 경로입니다.")
-                else:
-                    st.caption("📁 해당 경로가 없으면 자동으로 생성됩니다.")
-            else:
-                st.caption("💡 비워두면 시스템 임시 폴더에 저장됩니다.")
-
-        with col4:
             auto_zip = st.checkbox("🗜️ 완료 후 자동 압축", value=True)
+        with col4:
             save_md = st.checkbox("📝 MD 파일도 함께 생성", value=False)
 
         st.divider()
@@ -904,7 +1215,6 @@ def main():
                         <th>Status</th>
                         <th>Last Updated</th>
                         <th>Records Found</th>
-                        <th style="text-align:right;">Action</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -918,7 +1228,6 @@ def main():
                         <td><span class="status-badge status-success"><span class="status-dot pulse"></span> Success</span></td>
                         <td><div><span style="font-weight:500;">2023-10-27</span><br/><span style="font-size:0.75rem;color:#9a804c;">14:30:22</span></div></td>
                         <td><span style="font-weight:700;">142</span> <span style="font-size:0.75rem;color:#9a804c;">items</span></td>
-                        <td style="text-align:right;"><span class="material-symbols-outlined" style="color:#9a804c;font-size:20px;">visibility</span></td>
                     </tr>
                     <tr>
                         <td>
@@ -930,7 +1239,6 @@ def main():
                         <td><span class="status-badge status-running"><span class="material-symbols-outlined" style="font-size:14px;animation:spin 1s linear infinite;">sync</span> Running</span></td>
                         <td><div><span style="font-weight:500;">2023-10-27</span><br/><span style="font-size:0.75rem;color:#9a804c;">14:25:10</span></div></td>
                         <td><span style="font-weight:700;color:#9a804c;font-style:italic;">Pending...</span></td>
-                        <td style="text-align:right;"><span class="material-symbols-outlined" style="color:#d32f2f;font-size:20px;">stop_circle</span></td>
                     </tr>
                     <tr>
                         <td>
@@ -942,7 +1250,6 @@ def main():
                         <td><span class="status-badge status-success"><span class="status-dot"></span> Success</span></td>
                         <td><div><span style="font-weight:500;">2023-10-27</span><br/><span style="font-size:0.75rem;color:#9a804c;">13:15:00</span></div></td>
                         <td><span style="font-weight:700;">98</span> <span style="font-size:0.75rem;color:#9a804c;">items</span></td>
-                        <td style="text-align:right;"><span class="material-symbols-outlined" style="color:#9a804c;font-size:20px;">visibility</span></td>
                     </tr>
                     <tr>
                         <td>
@@ -954,7 +1261,6 @@ def main():
                         <td><span class="status-badge status-failed"><span class="material-symbols-outlined" style="font-size:14px;">error</span> Failed</span></td>
                         <td><div><span style="font-weight:500;">2023-10-27</span><br/><span style="font-size:0.75rem;color:#9a804c;">12:00:45</span></div></td>
                         <td><span style="font-weight:700;color:#9a804c;">0</span> <span style="font-size:0.75rem;color:#9a804c;">items</span></td>
-                        <td style="text-align:right;"><span style="font-size:0.75rem;font-weight:700;color:#eca413;">Retry</span> <span class="material-symbols-outlined" style="color:#eca413;font-size:18px;vertical-align:middle;">replay</span></td>
                     </tr>
                     <tr>
                         <td>
@@ -966,22 +1272,12 @@ def main():
                         <td><span class="status-badge status-success"><span class="status-dot"></span> Success</span></td>
                         <td><div><span style="font-weight:500;">2023-10-27</span><br/><span style="font-size:0.75rem;color:#9a804c;">11:45:12</span></div></td>
                         <td><span style="font-weight:700;">210</span> <span style="font-size:0.75rem;color:#9a804c;">items</span></td>
-                        <td style="text-align:right;"><span class="material-symbols-outlined" style="color:#9a804c;font-size:20px;">visibility</span></td>
                     </tr>
                 </tbody>
             </table>
-            <div class="table-pagination">
-                <span style="font-weight:500;">Showing 1-5 of 120 items</span>
-                <div style="display:flex;gap:8px;">
-                    <span class="page-btn" style="opacity:0.5;cursor:default;"><span class="material-symbols-outlined" style="font-size:14px;">chevron_left</span></span>
-                    <span class="page-btn active">1</span>
-                    <span class="page-btn">2</span>
-                    <span class="page-btn">3</span>
-                    <span class="page-btn"><span class="material-symbols-outlined" style="font-size:14px;">chevron_right</span></span>
-                </div>
-            </div>
             </div>
             """, unsafe_allow_html=True)
+            st.caption("💡 위 테이블은 샘플 데이터입니다. 은행을 선택하고 스크래핑을 실행하면 실제 결과가 표시됩니다.")
 
         # ========== 로그 섹션 ==========
         st.divider()
@@ -1011,21 +1307,8 @@ def main():
             )
 
             # 저장 경로 설정
-            disclosure_save_path = st.text_input(
-                "📂 파일 저장 경로",
-                value=st.session_state.disclosure_save_path,
-                placeholder="예: /home/user/Downloads/disclosure_files",
-                help="공시파일이 저장될 폴더 경로를 지정하세요. 비워두면 임시 폴더에 저장됩니다.",
-                key="disclosure_save_path_input"
-            )
+            disclosure_save_path = folder_picker("disclosure_path", label="📂 공시파일 저장 경로")
             st.session_state.disclosure_save_path = disclosure_save_path
-            if disclosure_save_path:
-                if os.path.isdir(disclosure_save_path):
-                    st.caption("✅ 유효한 경로입니다.")
-                else:
-                    st.caption("📁 해당 경로가 없으면 자동으로 생성됩니다.")
-            else:
-                st.caption("💡 비워두면 시스템 임시 폴더에 저장됩니다.")
 
             st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
@@ -1159,11 +1442,13 @@ def main():
         <div class="log-card">
             <div class="log-card-header">
                 <h3>System Logs</h3>
-                <a href="#">View All</a>
             </div>
             {log_html_items}
         </div>
         """, unsafe_allow_html=True)
+        if st.button("📋 View All Logs", key="view_all_logs_btn", use_container_width=True):
+            st.session_state.sidebar_page = "logs"
+            st.rerun()
 
     with bottom_col2:
         # API Usage Chart Card
@@ -1191,37 +1476,8 @@ def main():
         </div>
         """, unsafe_allow_html=True)
 
-    # ========== 앱 정보 (탭 바깥) ==========
-    st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
-    with st.expander("ℹ️ 앱 정보", expanded=False):
-        st.markdown("""
-        ### 저축은행 공시자료 크롤링 시스템 v4.1
-
-        **주요 기능:**
-        - 79개 저축은행 분기공시/결산공시 데이터 자동 수집
-        - 은행별 공시 날짜 표시
-        - Excel 파일 형식으로 데이터 저장
-        - ZIP 압축 다운로드 지원
-        - 실시간 진행 상태 및 경과 시간 표시
-        - GPT-5.2 API를 활용한 AI 표 정리 및 엑셀 자동 생성
-        - API 키 보안 저장 지원 (.streamlit/secrets.toml, 환경변수)
-        - 통일경영공시/감사보고서 파일 일괄 다운로드
-
-        **사용 방법:**
-        1. 스크래핑 유형 선택 (분기공시/결산공시)
-        2. 스크래핑할 은행 선택 (전체 또는 개별)
-        3. '스크래핑 시작' 버튼 클릭
-        4. 완료 후 결과 파일 다운로드
-        5. (선택) AI 표 정리 버튼으로 데이터 분석 엑셀 생성
-        6. (선택) 공시파일 일괄 다운로드로 원본 파일 수집
-
-        **API 키 설정:**
-        - `.streamlit/secrets.toml` 파일에 `OPENAI_API_KEY = "sk-..."` 입력
-        - 또는 환경변수 `OPENAI_API_KEY` 설정
-
-        **데이터 출처:**
-        - 저축은행중앙회 통일경영공시 (https://www.fsb.or.kr)
-        """)
+    # 하단 여백
+    st.markdown("<div style='height:2rem'></div>", unsafe_allow_html=True)
 
 
 def _display_validation_result(validation):
