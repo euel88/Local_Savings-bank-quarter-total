@@ -12,6 +12,7 @@ import pandas as pd
 import os
 import time
 import tempfile
+import threading
 import zipfile
 from datetime import datetime
 
@@ -377,24 +378,14 @@ st.markdown("""
 
 
 def _get_default_download_path():
-    """OS에 맞는 기본 다운로드 폴더 경로를 반환"""
-    # Windows: C:/Users/<user>/Downloads
-    win_download = os.path.join(os.path.expanduser("~"), "Downloads")
-    if os.path.isdir(win_download):
-        return win_download
-
-    # 일반적인 Windows C드라이브 다운로드 폴더
-    for drive in ["C:", "D:"]:
-        candidate = os.path.join(drive, os.sep, "Users")
-        if os.path.isdir(candidate):
-            # Users 폴더 내 현재 사용자 찾기
-            username = os.environ.get("USERNAME", os.environ.get("USER", ""))
-            if username:
-                user_dl = os.path.join(candidate, username, "Downloads")
-                if os.path.isdir(user_dl):
-                    return user_dl
-
-    # fallback: 홈 디렉토리
+    """기본 다운로드 폴더 경로를 반환"""
+    default = r"C:\Users\OK\Downloads"
+    if os.path.isdir(default):
+        return default
+    # fallback: 홈 디렉토리의 Downloads
+    fallback = os.path.join(os.path.expanduser("~"), "Downloads")
+    if os.path.isdir(fallback):
+        return fallback
     return os.path.expanduser("~")
 
 
@@ -551,6 +542,88 @@ def format_elapsed_time(seconds):
         return f"{secs}초"
 
 
+@st.fragment(run_every=2)
+def _render_scraping_progress():
+    """스크래핑 실시간 진행 상태를 표시하는 fragment (2초마다 자동 갱신)"""
+    progress = st.session_state.scraping_progress
+    phase = progress.get('phase', '')
+    current_idx = progress.get('current_idx', 0)
+    total = progress.get('total_banks', 1) or 1
+    current_bank = progress.get('current_bank', '')
+    start_time = progress.get('start_time', 0)
+    partial_results = progress.get('partial_results', [])
+
+    elapsed = time.time() - start_time if start_time else 0
+    pct = current_idx / total
+
+    # 단계 텍스트
+    if phase == 'scraping':
+        phase_text = f"처리 중: **{current_bank}** ({current_idx}/{total})"
+    elif phase == 'zipping':
+        phase_text = "📦 파일 압축 중..."
+        pct = 1.0
+    elif phase == 'ai_excel':
+        phase_text = "🤖 GPT-5.2가 분기총괄 엑셀 생성 중..."
+        pct = 1.0
+    elif phase == 'done':
+        phase_text = "✅ 완료!"
+        pct = 1.0
+    elif phase == 'error':
+        phase_text = "❌ 오류 발생"
+        pct = 1.0
+    else:
+        phase_text = "준비 중..."
+
+    st.progress(pct)
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.markdown(phase_text)
+    with col2:
+        st.markdown(f"⏱️ **{format_elapsed_time(elapsed)}**")
+
+    # 실시간 로그 (최근 5줄)
+    if st.session_state.logs:
+        recent_logs = st.session_state.logs[-5:]
+        st.text_area("실시간 로그", value="\n".join(recent_logs), height=120, disabled=True, key="bg_log_area")
+
+    # 실시간 부분 결과 요약
+    if partial_results:
+        success = sum(1 for r in partial_results if r.get('success'))
+        fail = len(partial_results) - success
+        st.caption(f"현재까지: 성공 {success}개 / 실패 {fail}개 / 전체 {total}개")
+
+    # 완료 시 자동 갱신 중단 (페이지 전체 리로드)
+    if not st.session_state.scraping_running:
+        st.rerun()
+
+
+@st.fragment(run_every=3)
+def _render_global_scraping_banner():
+    """페이지와 관계없이 표시되는 스크래핑 진행 배너"""
+    if not st.session_state.scraping_running:
+        return
+
+    progress = st.session_state.scraping_progress
+    phase = progress.get('phase', '')
+    current_idx = progress.get('current_idx', 0)
+    total = progress.get('total_banks', 1) or 1
+    current_bank = progress.get('current_bank', '')
+    start_time = progress.get('start_time', 0)
+
+    elapsed = time.time() - start_time if start_time else 0
+
+    if phase == 'scraping':
+        msg = f"🔄 스크래핑 진행 중: **{current_bank}** ({current_idx}/{total}) — ⏱️ {format_elapsed_time(elapsed)}"
+    elif phase == 'zipping':
+        msg = f"📦 파일 압축 중... — ⏱️ {format_elapsed_time(elapsed)}"
+    elif phase == 'ai_excel':
+        msg = f"🤖 GPT-5.2 엑셀 생성 중... — ⏱️ {format_elapsed_time(elapsed)}"
+    else:
+        msg = f"🔄 스크래핑 진행 중... — ⏱️ {format_elapsed_time(elapsed)}"
+
+    st.info(msg)
+
+
 def init_session_state():
     """세션 상태 초기화"""
     if 'scraping_running' not in st.session_state:
@@ -585,6 +658,18 @@ def init_session_state():
         st.session_state.scraping_save_path = ""
     if 'disclosure_save_path' not in st.session_state:
         st.session_state.disclosure_save_path = ""
+    # 백그라운드 스크래핑 진행 상태
+    if 'scraping_progress' not in st.session_state:
+        st.session_state.scraping_progress = {
+            'current_bank': '',
+            'current_idx': 0,
+            'total_banks': 0,
+            'phase': '',        # 'scraping', 'zipping', 'ai_excel', 'done', 'error'
+            'start_time': 0,
+            'partial_results': [],  # 진행 중 실시간 결과
+        }
+    if '_scraping_thread' not in st.session_state:
+        st.session_state._scraping_thread = None
 
 
 def main():
@@ -649,6 +734,10 @@ def main():
     if current_page == "config":
         st.session_state.sidebar_page = "dashboard"
         current_page = "dashboard"
+
+    # 스크래핑 진행 중이면 Dashboard 외 페이지에서 글로벌 배너 표시
+    if st.session_state.scraping_running and current_page != "dashboard":
+        _render_global_scraping_banner()
 
     # --- Data Logs 페이지 ---
     if current_page == "logs":
@@ -787,11 +876,12 @@ def main():
     # ========== Stat Cards ==========
     stat_col1, stat_col2, stat_col3 = st.columns(3)
 
-    # Calculate live stats
+    # Calculate live stats (진행 중이면 partial_results 참조)
     active_crawlers = len(st.session_state.selected_banks) if st.session_state.scraping_running else 0
     total_crawlers = 79
-    data_collected = sum(1 for r in st.session_state.results if r.get('success', False)) if st.session_state.results else 0
-    total_records = len(st.session_state.results) if st.session_state.results else 0
+    live_results = st.session_state.scraping_progress.get('partial_results', []) if st.session_state.scraping_running else st.session_state.results
+    data_collected = sum(1 for r in live_results if r.get('success', False)) if live_results else 0
+    total_records = len(live_results) if live_results else 0
     health_pct = "99.9%"
 
     with stat_col1:
@@ -966,7 +1056,7 @@ def main():
                     st.error("스크래핑할 은행을 선택하세요.")
                 else:
                     st.session_state.ai_table_generated = False
-                    run_scraping(
+                    start_scraping(
                         selected_banks,
                         scrape_type,
                         auto_zip,
@@ -975,9 +1065,11 @@ def main():
                         api_key=api_key,
                         save_path=scraping_save_path
                     )
+                    st.rerun()
 
+        # ========== 실시간 진행 상태 ==========
         if st.session_state.scraping_running:
-            st.info("⏳ 스크래핑이 진행 중입니다. 잠시만 기다려주세요...")
+            _render_scraping_progress()
 
         st.divider()
 
@@ -1246,26 +1338,16 @@ def _display_validation_result(validation):
     st.caption("💡 엑셀 파일의 '정합성검증' 시트에서 전체 검증 결과를 확인할 수 있습니다.")
 
 
-def run_scraping(selected_banks, scrape_type, auto_zip, download_filename, use_chatgpt=False, api_key=None, save_path=None):
-    """스크래핑 실행"""
-    st.session_state.scraping_running = True
-    st.session_state.results = []
-    st.session_state.logs = []
-    st.session_state.bank_dates = {}
-    st.session_state.summary_excel_path = None
-    st.session_state.validation_result = None
+def _scraping_worker(session_state_proxy, selected_banks, scrape_type, auto_zip, download_filename, use_chatgpt=False, api_key=None, save_path=None):
+    """백그라운드 스레드에서 실행되는 스크래핑 워커.
 
+    session_state_proxy: st.session_state의 참조 (스레드에서 직접 쓰기 가능한 dict-like)
+    """
+    progress = session_state_proxy['scraping_progress']
     start_time = time.time()
-
-    # 진행 상태 표시
-    progress_container = st.container()
-    with progress_container:
-        progress_bar = st.progress(0)
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            status_text = st.empty()
-            elapsed_text = st.empty()
-        log_container = st.empty()
+    progress['start_time'] = start_time
+    progress['phase'] = 'scraping'
+    progress['partial_results'] = []
 
     try:
         config = Config(scrape_type, output_dir=save_path if save_path else None)
@@ -1273,61 +1355,57 @@ def run_scraping(selected_banks, scrape_type, auto_zip, download_filename, use_c
         scraper = BankScraper(config, logger)
 
         total_banks = len(selected_banks)
+        progress['total_banks'] = total_banks
         results = []
         bank_dates = {}
 
         for idx, bank in enumerate(selected_banks):
-            # 경과 시간 업데이트
-            elapsed = time.time() - start_time
-            st.session_state.elapsed_time = elapsed
+            # 진행 상태 업데이트 (메인 스레드가 읽음)
+            progress['current_bank'] = bank
+            progress['current_idx'] = idx + 1
 
-            progress = (idx + 1) / total_banks
-            progress_bar.progress(progress)
-            status_text.markdown(f"**처리 중:** {bank} ({idx + 1}/{total_banks})")
-            elapsed_text.markdown(f"⏱️ 경과 시간: **{format_elapsed_time(elapsed)}**")
+            elapsed = time.time() - start_time
+            session_state_proxy['elapsed_time'] = elapsed
 
             logger.log_message(f"[시작] {bank} 스크래핑")
 
             filepath, success, date_info = scraper.scrape_bank(bank)
-            results.append({
+            result = {
                 'bank': bank,
                 'success': success,
                 'filepath': filepath,
                 'date_info': date_info
-            })
-
-            # 날짜 정보 저장
+            }
+            results.append(result)
             bank_dates[bank] = date_info
+
+            # 실시간 결과 업데이트
+            progress['partial_results'] = list(results)
 
             status = "완료" if success else "실패"
             logger.log_message(f"[{status}] {bank} - 공시일: {date_info}")
+            session_state_proxy['logs'] = logger.messages.copy()
 
-            # 로그 업데이트
-            st.session_state.logs = logger.messages.copy()
-            log_container.text_area("실시간 로그", value=logger.get_logs(), height=150, disabled=True, key=f"log_{idx}")
-
-            # 은행 간 딜레이
             time.sleep(0.5)
 
         # 최종 경과 시간
         final_elapsed = time.time() - start_time
-        st.session_state.elapsed_time = final_elapsed
-
-        # 결과 저장
-        st.session_state.results = results
-        st.session_state.bank_dates = bank_dates
+        session_state_proxy['elapsed_time'] = final_elapsed
+        session_state_proxy['results'] = results
+        session_state_proxy['bank_dates'] = bank_dates
 
         # ZIP 압축
         if auto_zip:
-            status_text.markdown("**📦 파일 압축 중...**")
+            progress['phase'] = 'zipping'
+            logger.log_message("ZIP 파일 압축 중...")
             zip_path = scraper.create_zip_archive(results, download_filename)
             if zip_path:
-                st.session_state.zip_path = zip_path
-                logger.log_message(f"ZIP 파일 생성 완료")
+                session_state_proxy['zip_path'] = zip_path
+                logger.log_message("ZIP 파일 생성 완료")
 
-        # GPT-5.2로 분기총괄 엑셀 생성 및 정합성 검증
+        # GPT-5.2 엑셀 생성
         if use_chatgpt and api_key and EXCEL_GENERATOR_AVAILABLE:
-            status_text.markdown("**🤖 GPT-5.2가 분기총괄 엑셀 생성 및 정합성 검증 중...**")
+            progress['phase'] = 'ai_excel'
             logger.log_message("GPT-5.2 API로 분기총괄 엑셀 생성 및 정합성 검증 시작")
 
             try:
@@ -1341,9 +1419,9 @@ def run_scraping(selected_banks, scrape_type, auto_zip, download_filename, use_c
                 validation = gen_result.get("validation") if isinstance(gen_result, dict) else None
 
                 if summary_excel_path:
-                    st.session_state.summary_excel_path = summary_excel_path
-                    st.session_state.validation_result = validation
-                    st.session_state.ai_table_generated = True
+                    session_state_proxy['summary_excel_path'] = summary_excel_path
+                    session_state_proxy['validation_result'] = validation
+                    session_state_proxy['ai_table_generated'] = True
                     logger.log_message("GPT-5.2 분기총괄 엑셀 생성 완료")
 
                     if validation:
@@ -1358,29 +1436,45 @@ def run_scraping(selected_banks, scrape_type, auto_zip, download_filename, use_c
                             logger.log_message("⚠️ 정합성 검증에서 오류가 발견되었습니다. 결과를 확인하세요.")
             except Exception as e:
                 logger.log_message(f"AI 엑셀 생성 오류: {str(e)}")
-                st.warning(f"⚠️ AI 엑셀 생성 중 오류 발생: {str(e)}")
 
         # 완료
-        progress_bar.progress(1.0)
-        success_count = sum(1 for r in results if r['success'])
-        status_text.markdown(f"**✅ 완료!** 성공: {success_count}/{total_banks}")
-        elapsed_text.markdown(f"⏱️ 총 소요 시간: **{format_elapsed_time(final_elapsed)}**")
-
-        completion_msg = f"🎉 스크래핑 완료! 성공: {success_count}개, 실패: {total_banks - success_count}개, 소요시간: {format_elapsed_time(final_elapsed)}"
-        if st.session_state.summary_excel_path:
-            completion_msg += " | 🤖 GPT-5.2 엑셀 생성 완료"
-            if st.session_state.validation_result:
-                v_score = st.session_state.validation_result.get("score", 0)
-                completion_msg += f" | 🔍 정합성: {v_score}점"
-        st.success(completion_msg)
-        st.session_state.logs = logger.messages.copy()
+        session_state_proxy['logs'] = logger.messages.copy()
+        progress['phase'] = 'done'
 
     except Exception as e:
-        st.error(f"❌ 스크래핑 중 오류 발생: {str(e)}")
-        st.session_state.logs.append(f"[오류] {str(e)}")
+        session_state_proxy['logs'].append(f"[오류] {str(e)}")
+        progress['phase'] = 'error'
 
     finally:
-        st.session_state.scraping_running = False
+        session_state_proxy['scraping_running'] = False
+
+
+def start_scraping(selected_banks, scrape_type, auto_zip, download_filename, use_chatgpt=False, api_key=None, save_path=None):
+    """스크래핑을 백그라운드 스레드로 시작"""
+    st.session_state.scraping_running = True
+    st.session_state.results = []
+    st.session_state.logs = []
+    st.session_state.bank_dates = {}
+    st.session_state.summary_excel_path = None
+    st.session_state.validation_result = None
+    st.session_state.elapsed_time = 0
+    st.session_state.scraping_progress = {
+        'current_bank': '',
+        'current_idx': 0,
+        'total_banks': len(selected_banks),
+        'phase': 'scraping',
+        'start_time': time.time(),
+        'partial_results': [],
+    }
+
+    thread = threading.Thread(
+        target=_scraping_worker,
+        args=(st.session_state, selected_banks, scrape_type, auto_zip, download_filename),
+        kwargs={'use_chatgpt': use_chatgpt, 'api_key': api_key, 'save_path': save_path},
+        daemon=True
+    )
+    st.session_state._scraping_thread = thread
+    thread.start()
 
 
 def run_disclosure_download(save_path=None):
