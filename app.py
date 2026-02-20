@@ -1477,32 +1477,44 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
         results = []
         bank_dates = {}
 
-        for idx, bank in enumerate(selected_banks):
-            progress['current_bank'] = bank
-            progress['current_idx'] = idx + 1
+        # 드라이버 1회 생성 후 전체 은행에 재사용
+        from scraper_core import create_driver
+        driver = None
+        try:
+            driver = create_driver()
 
-            elapsed = time.time() - start_time
-            shared['elapsed_time'] = elapsed
+            for idx, bank in enumerate(selected_banks):
+                progress['current_bank'] = bank
+                progress['current_idx'] = idx + 1
 
-            logger.log_message(f"[시작] {bank} 스크래핑")
+                elapsed = time.time() - start_time
+                shared['elapsed_time'] = elapsed
 
-            filepath, success, date_info = scraper.scrape_bank(bank)
-            result = {
-                'bank': bank,
-                'success': success,
-                'filepath': filepath,
-                'date_info': date_info
-            }
-            results.append(result)
-            bank_dates[bank] = date_info
+                logger.log_message(f"[시작] {bank} 스크래핑")
 
-            progress['partial_results'] = list(results)
+                filepath, success, date_info = scraper.scrape_bank(bank, shared_driver=driver)
+                result = {
+                    'bank': bank,
+                    'success': success,
+                    'filepath': filepath,
+                    'date_info': date_info
+                }
+                results.append(result)
+                bank_dates[bank] = date_info
 
-            status = "완료" if success else "실패"
-            logger.log_message(f"[{status}] {bank} - 공시일: {date_info}")
-            shared['logs'] = logger.messages.copy()
+                progress['partial_results'] = list(results)
 
-            time.sleep(0.5)
+                status = "완료" if success else "실패"
+                logger.log_message(f"[{status}] {bank} - 공시일: {date_info}")
+                shared['logs'] = logger.messages.copy()
+
+                time.sleep(0.3)
+        finally:
+            if driver:
+                try:
+                    driver.quit()
+                except:
+                    pass
 
         # 최종 경과 시간
         final_elapsed = time.time() - start_time

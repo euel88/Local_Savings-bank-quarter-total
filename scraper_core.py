@@ -248,7 +248,7 @@ class BankScraper:
         try:
             driver.get(self.config.BASE_URL)
             WaitUtils.wait_for_page_load(driver, self.config.PAGE_LOAD_TIMEOUT)
-            WaitUtils.wait_with_random(0.5, 1)
+            WaitUtils.wait_with_random(0.2, 0.5)
 
             # 은행명 매핑
             exact_bank_names = {
@@ -307,7 +307,7 @@ class BankScraper:
 
             result = driver.execute_script(js_script)
             if result:
-                WaitUtils.wait_with_random(1, 1.5)
+                WaitUtils.wait_with_random(0.3, 0.7)
                 if driver.current_url != self.config.BASE_URL:
                     return True
 
@@ -342,7 +342,7 @@ class BankScraper:
 
                 result = driver.execute_script(script)
                 if result:
-                    WaitUtils.wait_with_random(0.5, 1)
+                    WaitUtils.wait_with_random(0.2, 0.5)
                     return True
 
             return False
@@ -354,7 +354,7 @@ class BankScraper:
         """페이지에서 테이블을 추출합니다."""
         try:
             WaitUtils.wait_for_page_load(driver, self.config.PAGE_LOAD_TIMEOUT)
-            WaitUtils.wait_with_random(0.5, 1)
+            WaitUtils.wait_with_random(0.2, 0.4)
 
             html_source = driver.page_source
             dfs = pd.read_html(StringIO(html_source))
@@ -387,13 +387,19 @@ class BankScraper:
         except Exception as e:
             return []
 
-    def scrape_bank(self, bank_name, progress_callback=None):
-        """단일 은행 데이터 스크래핑 - 날짜 정보도 반환"""
-        driver = None
+    def scrape_bank(self, bank_name, progress_callback=None, shared_driver=None):
+        """단일 은행 데이터 스크래핑 - 날짜 정보도 반환
+
+        Args:
+            shared_driver: 외부에서 전달받은 드라이버 (재사용). None이면 자체 생성/소멸.
+        """
+        own_driver = shared_driver is None
+        driver = shared_driver
         date_info = "날짜 정보 없음"
 
         try:
-            driver = create_driver()
+            if own_driver:
+                driver = create_driver()
             self.logger.log_message(f"[시작] {bank_name} 은행 스크래핑")
 
             if not self.select_bank(driver, bank_name):
@@ -448,35 +454,48 @@ class BankScraper:
             self.logger.log_message(f"{bank_name} 스크래핑 오류: {str(e)}")
             return None, False, date_info
         finally:
-            if driver:
+            if own_driver and driver:
                 try:
                     driver.quit()
                 except:
                     pass
 
     def scrape_multiple_banks(self, banks, progress_callback=None):
-        """여러 은행 스크래핑"""
+        """여러 은행 스크래핑 - 드라이버 1회 생성으로 재사용"""
         results = []
         total = len(banks)
+        driver = None
 
-        for idx, bank in enumerate(banks):
-            if progress_callback:
-                progress_callback(bank, f"처리 중 ({idx+1}/{total})")
+        try:
+            driver = create_driver()
 
-            filepath, success, date_info = self.scrape_bank(bank, progress_callback)
-            results.append({
-                'bank': bank,
-                'success': success,
-                'filepath': filepath,
-                'date_info': date_info
-            })
+            for idx, bank in enumerate(banks):
+                if progress_callback:
+                    progress_callback(bank, f"처리 중 ({idx+1}/{total})")
 
-            if progress_callback:
-                status = "완료" if success else "실패"
-                progress_callback(bank, status)
+                filepath, success, date_info = self.scrape_bank(
+                    bank, progress_callback, shared_driver=driver
+                )
+                results.append({
+                    'bank': bank,
+                    'success': success,
+                    'filepath': filepath,
+                    'date_info': date_info
+                })
 
-            # 은행 간 딜레이
-            WaitUtils.wait_with_random(1, 2)
+                if progress_callback:
+                    status = "완료" if success else "실패"
+                    progress_callback(bank, status)
+
+                # 은행 간 딜레이 (축소)
+                WaitUtils.wait_with_random(0.3, 0.7)
+
+        finally:
+            if driver:
+                try:
+                    driver.quit()
+                except:
+                    pass
 
         return results
 
