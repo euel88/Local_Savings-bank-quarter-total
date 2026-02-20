@@ -117,7 +117,7 @@ JSON 형식 예시:
                     {"role": "system", "content": "당신은 금융 데이터 분석 전문가입니다. 정확하게 데이터를 추출하고 JSON 형식으로만 응답합니다."},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=self.config.MAX_TOKENS,
+                max_completion_tokens=self.config.MAX_TOKENS,
                 temperature=self.config.TEMPERATURE
             )
 
@@ -163,18 +163,33 @@ JSON 형식 예시:
             else:
                 extracted = {}
 
+            # ChatGPT 결과가 비어있거나 핵심 값이 없으면 DirectExcelGenerator로 폴백
+            key_fields = ["자산", "순이익", "누자본"]
+            has_key_data = any(
+                extracted.get(k) is not None and extracted.get(k) != ""
+                for k in key_fields
+            )
+            if not has_key_data and filepath:
+                fallback = DirectExcelGenerator()
+                fallback_data = fallback._extract_from_file(filepath)
+                if fallback_data:
+                    # ChatGPT 결과와 병합 (폴백 값으로 빈 항목 보충)
+                    for k, v in fallback_data.items():
+                        if v is not None and (extracted.get(k) is None or extracted.get(k) == ""):
+                            extracted[k] = v
+
             # 데이터 행 구성
             row = {
                 "No": idx,
                 "은행명": bank_name,
-                "자산(최근분기)": extracted.get("자산", ""),
-                "이익(최근분기)": extracted.get("이익", ""),
-                "순이익": extracted.get("순이익", ""),
-                "누자본(최근분기신)": extracted.get("누자본", ""),
-                "최근분기": extracted.get("최근분기", ""),
-                "신(최근분기)": extracted.get("신", ""),
-                "기자본비": extracted.get("기자본비", ""),
-                "위하여신비": extracted.get("위하여신비", "")
+                "자산(최근분기)": extracted.get("자산") or "",
+                "이익(최근분기)": extracted.get("이익") or "",
+                "순이익": extracted.get("순이익") or "",
+                "누자본(최근분기신)": extracted.get("누자본") or "",
+                "최근분기": extracted.get("최근분기") or "",
+                "신(최근분기)": extracted.get("신") or "",
+                "기자본비": extracted.get("기자본비") or "",
+                "위하여신비": extracted.get("위하여신비") or ""
             }
             formatted_data.append(row)
 
@@ -495,7 +510,7 @@ JSON 형식:
                     {"role": "system", "content": "당신은 금융 데이터 품질 검증 전문가입니다. 원본 데이터와 가공 데이터를 비교하여 정합성을 검증합니다. 반드시 JSON 형식으로만 응답하세요."},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=self.config.MAX_TOKENS,
+                max_completion_tokens=self.config.MAX_TOKENS,
                 temperature=self.config.TEMPERATURE
             )
 
@@ -561,7 +576,7 @@ JSON 형식:
                     {"role": "system", "content": "당신은 금융 데이터 분석 전문가입니다. 지시에 따라 데이터를 정확하게 처리합니다."},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=self.config.MAX_TOKENS,
+                max_completion_tokens=self.config.MAX_TOKENS,
                 temperature=self.config.TEMPERATURE
             )
 
@@ -651,6 +666,79 @@ class DirectExcelGenerator:
 
         return output_path
 
+    @staticmethod
+    def _to_numeric(val):
+        """값을 숫자로 변환. 문자열 '1,234,567' 등도 처리."""
+        if val is None:
+            return None
+        if isinstance(val, (int, float)):
+            if pd.isna(val):
+                return None
+            return val
+        try:
+            cleaned = str(val).replace(',', '').replace(' ', '').strip()
+            if cleaned in ('', '-', 'nan', 'None', 'NaN'):
+                return None
+            return pd.to_numeric(cleaned, errors='coerce')
+        except Exception:
+            return None
+
+    def _identify_period_columns(self, df: pd.DataFrame):
+        """당기/전년동기 컬럼 구분"""
+        current_cols = []
+        previous_cols = []
+        other_cols = []
+
+        for col in df.columns:
+            col_str = str(col).strip()
+            if any(kw in col_str for kw in ['당기', '현재', '이번', '당분기']):
+                current_cols.append(col)
+            elif any(kw in col_str for kw in ['전년', '작년', '이전', '전기', '전분기']):
+                previous_cols.append(col)
+            else:
+                other_cols.append(col)
+
+        return current_cols, previous_cols, other_cols
+
+    def _find_value_in_row(self, df, row_idx, label_col, current_cols, previous_cols, prefer_current=True):
+        """행에서 숫자 값 추출 (당기 컬럼 우선)"""
+        row = df.iloc[row_idx]
+
+        # 1) 당기 컬럼이 식별된 경우 해당 컬럼에서 추출
+        if prefer_current and current_cols:
+            for col in current_cols:
+                if col == label_col:
+                    continue
+                val = self._to_numeric(row[col])
+                if val is not None and pd.notna(val):
+                    return val
+
+        # 2) 당기 컬럼이 없으면 레이블 컬럼 이후의 컬럼에서 첫 번째 숫자 추출
+        found_label = False
+        for col in df.columns:
+            if col == label_col:
+                found_label = True
+                continue
+            if not found_label:
+                continue
+            # 전년동기 컬럼은 건너뛰기
+            col_str = str(col).strip()
+            if any(kw in col_str for kw in ['전년', '작년', '이전', '전기', '전분기']):
+                continue
+            val = self._to_numeric(row[col])
+            if val is not None and pd.notna(val):
+                return val
+
+        # 3) 폴백: 행의 모든 값에서 숫자 찾기 (레이블 컬럼 제외)
+        for col in df.columns:
+            if col == label_col:
+                continue
+            val = self._to_numeric(row[col])
+            if val is not None and pd.notna(val):
+                return val
+
+        return None
+
     def _extract_from_file(self, filepath: str) -> Dict[str, Any]:
         """엑셀 파일에서 재무 데이터 추출"""
         if not filepath or not os.path.exists(filepath):
@@ -662,18 +750,26 @@ class DirectExcelGenerator:
 
             for sheet_name in xl.sheet_names:
                 df = xl.parse(sheet_name)
+                if df.empty:
+                    continue
+
+                current_cols, previous_cols, _ = self._identify_period_columns(df)
 
                 # 재무현황 시트에서 데이터 추출
                 if '재무' in sheet_name:
-                    financial_data.update(self._parse_financial_sheet(df))
+                    financial_data.update(self._parse_financial_sheet(df, current_cols, previous_cols))
 
                 # 손익현황 시트에서 데이터 추출
                 if '손익' in sheet_name:
-                    financial_data.update(self._parse_income_sheet(df))
+                    financial_data.update(self._parse_income_sheet(df, current_cols, previous_cols))
 
                 # 영업개황 시트에서 데이터 추출
                 if '영업' in sheet_name:
-                    financial_data.update(self._parse_business_sheet(df))
+                    financial_data.update(self._parse_business_sheet(df, current_cols, previous_cols))
+
+                # 기타 시트에서 비율 데이터 추출
+                if '기타' in sheet_name:
+                    financial_data.update(self._parse_ratio_sheet(df, current_cols, previous_cols))
 
             return financial_data
 
@@ -681,97 +777,122 @@ class DirectExcelGenerator:
             print(f"파일 추출 오류: {e}")
             return {}
 
-    def _parse_financial_sheet(self, df: pd.DataFrame) -> Dict[str, Any]:
+    def _parse_financial_sheet(self, df: pd.DataFrame, current_cols, previous_cols) -> Dict[str, Any]:
         """재무현황 시트 파싱"""
         result = {}
 
         try:
-            df_str = df.to_string()
+            for row_idx in range(len(df)):
+                for col in df.columns:
+                    cell_str = str(df.iloc[row_idx][col]).strip()
 
-            # 총자산 찾기
-            if '총자산' in df_str or '자산총계' in df_str:
-                for _, row in df.iterrows():
-                    row_str = str(row.values)
-                    if '총자산' in row_str or '자산총계' in row_str:
-                        for val in row.values:
-                            if isinstance(val, (int, float)) and val > 0:
-                                result['자산'] = val
-                                break
+                    # 총자산 찾기
+                    if '자산' not in result and ('총자산' in cell_str or '자산총계' in cell_str):
+                        val = self._find_value_in_row(df, row_idx, col, current_cols, previous_cols)
+                        if val is not None and val > 0:
+                            result['자산'] = val
 
-            # 자기자본 찾기
-            if '자기자본' in df_str or '자본총계' in df_str:
-                for _, row in df.iterrows():
-                    row_str = str(row.values)
-                    if '자기자본' in row_str or '자본총계' in row_str:
-                        for val in row.values:
-                            if isinstance(val, (int, float)) and val > 0:
+                    # 자기자본 찾기
+                    if '누자본' not in result and (
+                        '자기자본' in cell_str or '자본총계' in cell_str or '자본합계' in cell_str
+                    ) and '자산' not in cell_str:
+                        val = self._find_value_in_row(df, row_idx, col, current_cols, previous_cols)
+                        if val is not None and val > 0:
+                            # 총자산과 같은 값이면 건너뛰기
+                            if result.get('자산') is None or val != result['자산']:
                                 result['누자본'] = val
-                                break
 
-            # BIS비율 찾기
-            if 'BIS' in df_str or '자본비율' in df_str:
-                for _, row in df.iterrows():
-                    row_str = str(row.values)
-                    if 'BIS' in row_str or '자본비율' in row_str:
-                        for val in row.values:
-                            if isinstance(val, (int, float)) and 0 < val < 100:
-                                result['기자본비'] = val
-                                break
-        except:
+                    # BIS비율 찾기
+                    if '기자본비' not in result and (
+                        'BIS' in cell_str or 'bis' in cell_str or
+                        '자기자본비율' in cell_str or
+                        '위험가중자산에' in cell_str
+                    ):
+                        val = self._find_value_in_row(df, row_idx, col, current_cols, previous_cols)
+                        if val is not None and 0 < val < 100:
+                            result['기자본비'] = val
+        except Exception:
             pass
 
         return result
 
-    def _parse_income_sheet(self, df: pd.DataFrame) -> Dict[str, Any]:
+    def _parse_income_sheet(self, df: pd.DataFrame, current_cols, previous_cols) -> Dict[str, Any]:
         """손익현황 시트 파싱"""
         result = {}
 
         try:
-            df_str = df.to_string()
+            for row_idx in range(len(df)):
+                for col in df.columns:
+                    cell_str = str(df.iloc[row_idx][col]).strip()
 
-            # 당기순이익 찾기
-            if '당기순이익' in df_str or '순이익' in df_str:
-                for _, row in df.iterrows():
-                    row_str = str(row.values)
-                    if '당기순이익' in row_str or '순이익' in row_str:
-                        for val in row.values:
-                            if isinstance(val, (int, float)):
-                                result['순이익'] = val
-                                result['이익'] = val
-                                break
-        except:
+                    # 당기순이익 찾기
+                    if '순이익' not in result and ('당기순이익' in cell_str or '순이익' in cell_str):
+                        val = self._find_value_in_row(df, row_idx, col, current_cols, previous_cols)
+                        if val is not None:
+                            result['순이익'] = val
+                            result['이익'] = val
+
+                    # 수익합계 찾기
+                    if '이익' not in result and ('수익합계' in cell_str or '영업수익' in cell_str):
+                        val = self._find_value_in_row(df, row_idx, col, current_cols, previous_cols)
+                        if val is not None:
+                            result['이익'] = val
+        except Exception:
             pass
 
         return result
 
-    def _parse_business_sheet(self, df: pd.DataFrame) -> Dict[str, Any]:
+    def _parse_business_sheet(self, df: pd.DataFrame, current_cols, previous_cols) -> Dict[str, Any]:
         """영업개황 시트 파싱"""
         result = {}
 
         try:
-            df_str = df.to_string()
+            for row_idx in range(len(df)):
+                for col in df.columns:
+                    cell_str = str(df.iloc[row_idx][col]).strip()
 
-            # 여신 찾기
-            if '여신' in df_str:
-                for _, row in df.iterrows():
-                    row_str = str(row.values)
-                    if '여신' in row_str and '고정이하' not in row_str:
-                        for val in row.values:
-                            if isinstance(val, (int, float)) and val > 0:
-                                result['신'] = val
-                                result['최근분기'] = val
-                                break
+                    # 총여신 찾기
+                    if '신' not in result and '여신' in cell_str and '고정이하' not in cell_str and '비율' not in cell_str:
+                        val = self._find_value_in_row(df, row_idx, col, current_cols, previous_cols)
+                        if val is not None and val > 0:
+                            result['신'] = val
+                            result['최근분기'] = val
 
-            # 고정이하여신비율 찾기
-            if '고정이하' in df_str or '연체' in df_str:
-                for _, row in df.iterrows():
-                    row_str = str(row.values)
-                    if '고정이하' in row_str or '연체율' in row_str:
-                        for val in row.values:
-                            if isinstance(val, (int, float)) and 0 <= val < 100:
-                                result['위하여신비'] = val
-                                break
-        except:
+                    # 고정이하여신비율 찾기
+                    if '위하여신비' not in result and ('고정이하여신비율' in cell_str or '고정이하' in cell_str):
+                        val = self._find_value_in_row(df, row_idx, col, current_cols, previous_cols)
+                        if val is not None and 0 <= val < 100:
+                            result['위하여신비'] = val
+        except Exception:
+            pass
+
+        return result
+
+    def _parse_ratio_sheet(self, df: pd.DataFrame, current_cols, previous_cols) -> Dict[str, Any]:
+        """기타 시트에서 비율 데이터 파싱"""
+        result = {}
+
+        try:
+            for row_idx in range(len(df)):
+                for col in df.columns:
+                    cell_str = str(df.iloc[row_idx][col]).strip()
+
+                    # BIS비율
+                    if '기자본비' not in result and (
+                        'BIS' in cell_str or 'bis' in cell_str or
+                        '자기자본비율' in cell_str or
+                        '위험가중자산에' in cell_str
+                    ):
+                        val = self._find_value_in_row(df, row_idx, col, current_cols, previous_cols)
+                        if val is not None and 0 < val < 100:
+                            result['기자본비'] = val
+
+                    # 고정이하여신비율
+                    if '위하여신비' not in result and ('고정이하여신비율' in cell_str or '고정이하' in cell_str):
+                        val = self._find_value_in_row(df, row_idx, col, current_cols, previous_cols)
+                        if val is not None and 0 <= val < 100:
+                            result['위하여신비'] = val
+        except Exception:
             pass
 
         return result

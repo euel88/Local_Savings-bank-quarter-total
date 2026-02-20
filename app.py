@@ -438,7 +438,7 @@ def folder_picker(key_prefix, label="📂 서버 저장 경로", default_path=""
     with col_btn:
         st.markdown("<div style='height:1.6rem'></div>", unsafe_allow_html=True)
         browse_label = "📂 찾아보기" if not st.session_state[browse_key] else "✕ 닫기"
-        if st.button(browse_label, key=f"{key_prefix}_toggle_btn", use_container_width=True):
+        if st.button(browse_label, key=f"{key_prefix}_toggle_btn", width="stretch"):
             st.session_state[browse_key] = not st.session_state[browse_key]
             st.rerun()
 
@@ -459,21 +459,21 @@ def folder_picker(key_prefix, label="📂 서버 저장 경로", default_path=""
         # 네비게이션 버튼
         nav_c1, nav_c2, nav_c3, nav_c4 = st.columns([1, 1, 1, 2])
         with nav_c1:
-            if st.button("⬆️ 상위 폴더", key=f"{key_prefix}_up", use_container_width=True):
+            if st.button("⬆️ 상위 폴더", key=f"{key_prefix}_up", width="stretch"):
                 parent = os.path.dirname(current)
                 if parent != current:
                     st.session_state[nav_key] = parent
                     st.rerun()
         with nav_c2:
-            if st.button("📥 Downloads", key=f"{key_prefix}_home", use_container_width=True):
+            if st.button("📥 Downloads", key=f"{key_prefix}_home", width="stretch"):
                 st.session_state[nav_key] = _get_default_download_path()
                 st.rerun()
         with nav_c3:
-            if st.button("🏠 홈", key=f"{key_prefix}_root", use_container_width=True):
+            if st.button("🏠 홈", key=f"{key_prefix}_root", width="stretch"):
                 st.session_state[nav_key] = os.path.expanduser("~")
                 st.rerun()
         with nav_c4:
-            if st.button("✅ 이 폴더 선택", key=f"{key_prefix}_select", type="primary", use_container_width=True):
+            if st.button("✅ 이 폴더 선택", key=f"{key_prefix}_select", type="primary", width="stretch"):
                 st.session_state[selected_key] = current
                 st.session_state[browse_key] = False
                 st.rerun()
@@ -489,7 +489,7 @@ def folder_picker(key_prefix, label="📂 서버 저장 경로", default_path=""
                     cols = st.columns(cols_per_row)
                     for j, d in enumerate(dirs[i:i + cols_per_row]):
                         with cols[j]:
-                            if st.button(f"📁 {d}", key=f"{key_prefix}_d_{i + j}", use_container_width=True):
+                            if st.button(f"📁 {d}", key=f"{key_prefix}_d_{i + j}", width="stretch"):
                                 st.session_state[nav_key] = os.path.join(current, d)
                                 st.rerun()
             else:
@@ -509,7 +509,7 @@ def folder_picker(key_prefix, label="📂 서버 저장 경로", default_path=""
                 label_visibility="collapsed"
             )
         with new_c2:
-            if st.button("📁+ 새 폴더", key=f"{key_prefix}_mkdir", use_container_width=True):
+            if st.button("📁+ 새 폴더", key=f"{key_prefix}_mkdir", width="stretch"):
                 if new_folder_name:
                     new_path = os.path.join(current, new_folder_name)
                     try:
@@ -523,7 +523,7 @@ def folder_picker(key_prefix, label="📂 서버 저장 경로", default_path=""
 
         # 기본 경로로 초기화 버튼
         if selected_path != resolved_default:
-            if st.button("🔄 기본 경로로 초기화 (Downloads)", key=f"{key_prefix}_clear", use_container_width=True):
+            if st.button("🔄 기본 경로로 초기화 (Downloads)", key=f"{key_prefix}_clear", width="stretch"):
                 st.session_state[selected_key] = resolved_default
                 st.session_state[nav_key] = resolved_default
                 st.session_state[browse_key] = False
@@ -876,7 +876,7 @@ def main():
                 st.metric("실패", f"{fail_count}개")
 
             df = create_summary_dataframe(results, st.session_state.bank_dates)
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.dataframe(df, width="stretch", hide_index=True)
 
             # 엑셀 다운로드
             if st.session_state.summary_excel_path and os.path.exists(st.session_state.summary_excel_path):
@@ -886,7 +886,7 @@ def main():
                         data=f,
                         file_name=f"저축은행_분기총괄_{datetime.now().strftime('%Y%m%d')}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
+                        width="stretch"
                     )
             if 'zip_path' in st.session_state and st.session_state.zip_path and os.path.exists(st.session_state.zip_path):
                 with open(st.session_state.zip_path, 'rb') as f:
@@ -895,7 +895,7 @@ def main():
                         data=f,
                         file_name=f"저축은행_데이터_{datetime.now().strftime('%Y%m%d')}.zip",
                         mime="application/zip",
-                        use_container_width=True
+                        width="stretch"
                     )
         else:
             st.info("📋 아직 보고서가 없습니다. 스크래핑을 실행하면 여기에 결과가 표시됩니다.")
@@ -1091,7 +1091,7 @@ def main():
         # 전체 선택/해제 버튼 (중앙 정렬)
         col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 1])
         with col2:
-            if st.button("✅ 전체 선택", use_container_width=True, type="primary"):
+            if st.button("✅ 전체 선택", width="stretch", type="primary"):
                 for bank in all_banks:
                     st.session_state[f"bank_{bank}"] = True
                 st.session_state.selected_banks = all_banks.copy()
@@ -1099,7 +1099,7 @@ def main():
         with col3:
             st.metric("선택된 은행", f"{len(st.session_state.selected_banks)}개 / 79개")
         with col4:
-            if st.button("❌ 전체 해제", use_container_width=True):
+            if st.button("❌ 전체 해제", width="stretch"):
                 for bank in all_banks:
                     st.session_state[f"bank_{bank}"] = False
                 st.session_state.selected_banks = []
@@ -1150,7 +1150,7 @@ def main():
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             start_disabled = not selected_banks or st.session_state.scraping_running
-            if st.button("🚀 스크래핑 시작", type="primary", use_container_width=True, disabled=start_disabled):
+            if st.button("🚀 스크래핑 시작", type="primary", width="stretch", disabled=start_disabled):
                 if not selected_banks:
                     st.error("스크래핑할 은행을 선택하세요.")
                 else:
@@ -1212,7 +1212,7 @@ def main():
             st.write("")
 
             df = create_summary_dataframe(results, st.session_state.bank_dates)
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.dataframe(df, width="stretch", hide_index=True)
 
             st.write("")
 
@@ -1224,7 +1224,7 @@ def main():
                     try:
                         preview_df = pd.read_excel(st.session_state.summary_excel_path, sheet_name='분기총괄')
                         st.markdown("**AI 분석 결과 미리보기:**")
-                        st.dataframe(preview_df, use_container_width=True, hide_index=True)
+                        st.dataframe(preview_df, width="stretch", hide_index=True)
                     except Exception:
                         pass
 
@@ -1238,14 +1238,14 @@ def main():
                                 data=f,
                                 file_name=f"저축은행_분기총괄_{datetime.now().strftime('%Y%m%d')}.xlsx",
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                use_container_width=True,
+                                width="stretch",
                                 type="secondary"
                             )
                 else:
                     st.info("💡 GPT-5.2를 활용하여 스크래핑 데이터를 표로 정리하고 엑셀로 반환할 수 있습니다.")
                     col1, col2, col3 = st.columns([1, 2, 1])
                     with col2:
-                        if st.button("🤖 AI로 표 정리 및 엑셀 생성", use_container_width=True, type="secondary"):
+                        if st.button("🤖 AI로 표 정리 및 엑셀 생성", width="stretch", type="secondary"):
                             with st.spinner("GPT-5.2가 데이터를 분석하고 정합성을 검증하는 중..."):
                                 try:
                                     gen_result = generate_excel_with_chatgpt(
@@ -1287,7 +1287,7 @@ def main():
                             data=f,
                             file_name=f"{download_filename}.zip",
                             mime="application/zip",
-                            use_container_width=True,
+                            width="stretch",
                             type="primary"
                         )
         else:
@@ -1317,7 +1317,7 @@ def main():
                 if st.button(
                     "📥 공시파일 일괄 다운로드 시작",
                     type="primary",
-                    use_container_width=True,
+                    width="stretch",
                     disabled=disclosure_disabled,
                     key="btn_disclosure_download"
                 ):
@@ -1348,7 +1348,7 @@ def main():
 
                 st.dataframe(
                     pd.DataFrame(dl_results),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True
                 )
 
@@ -1362,7 +1362,7 @@ def main():
                                 data=f,
                                 file_name=f"저축은행_공시파일_{datetime.now().strftime('%Y%m%d')}.zip",
                                 mime="application/zip",
-                                use_container_width=True,
+                                width="stretch",
                                 type="primary",
                                 key="btn_disclosure_zip"
                             )
@@ -1449,7 +1449,7 @@ def _display_validation_result(validation):
                 issues = ", ".join(detail.get("issues", [])) or "이상 없음"
                 detail_rows.append({"은행명": bank, "판정": f"{status_icon} {status}", "상세": issues})
             if detail_rows:
-                st.dataframe(pd.DataFrame(detail_rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(detail_rows), width="stretch", hide_index=True)
 
     # 검증 시트 안내
     st.caption("💡 엑셀 파일의 '정합성검증' 시트에서 전체 검증 결과를 확인할 수 있습니다.")
