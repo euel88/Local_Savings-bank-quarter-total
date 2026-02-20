@@ -377,24 +377,14 @@ st.markdown("""
 
 
 def _get_default_download_path():
-    """OS에 맞는 기본 다운로드 폴더 경로를 반환"""
-    # Windows: C:/Users/<user>/Downloads
-    win_download = os.path.join(os.path.expanduser("~"), "Downloads")
-    if os.path.isdir(win_download):
-        return win_download
-
-    # 일반적인 Windows C드라이브 다운로드 폴더
-    for drive in ["C:", "D:"]:
-        candidate = os.path.join(drive, os.sep, "Users")
-        if os.path.isdir(candidate):
-            # Users 폴더 내 현재 사용자 찾기
-            username = os.environ.get("USERNAME", os.environ.get("USER", ""))
-            if username:
-                user_dl = os.path.join(candidate, username, "Downloads")
-                if os.path.isdir(user_dl):
-                    return user_dl
-
-    # fallback: 홈 디렉토리
+    """기본 다운로드 폴더 경로를 반환"""
+    default = r"C:\Users\OK\Downloads"
+    if os.path.isdir(default):
+        return default
+    # fallback: 홈 디렉토리의 Downloads
+    fallback = os.path.join(os.path.expanduser("~"), "Downloads")
+    if os.path.isdir(fallback):
+        return fallback
     return os.path.expanduser("~")
 
 
