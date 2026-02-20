@@ -66,10 +66,11 @@ def get_memory_usage() -> float:
 
 
 def check_system_health() -> bool:
-    """시스템 상태 체크 (메모리)"""
+    """시스템 상태 체크 (메모리, CPU)"""
     if not PSUTIL_AVAILABLE:
         return True
     memory_percent = get_memory_usage()
+    cpu_percent = psutil.cpu_percent(interval=0.1)
     if memory_percent > MEMORY_THRESHOLD:
         gc.collect()
         time.sleep(1)
@@ -147,8 +148,12 @@ class DisclosureDownloader:
             chrome_options.add_argument('--headless=new')
 
         # 메모리 최적화 설정
+        chrome_options.add_argument('--memory-pressure-off')
+        chrome_options.add_argument('--max_old_space_size=512')
         chrome_options.add_argument('--disable-features=TranslateUI')
+        chrome_options.add_argument('--disable-background-timer-throttling')
         chrome_options.add_argument('--disable-plugins')
+        chrome_options.add_argument('--disable-images')
         chrome_options.add_argument('--disable-default-apps')
         chrome_options.add_argument('--disable-extensions')
         chrome_options.add_argument('--disable-background-networking')
@@ -390,107 +395,113 @@ class DisclosureDownloader:
             "비고": ""
         }
 
-        link_map = {
-            "통일경영공시": bank_data.get("unify_cell_idx", -1),
-            "감사보고서": bank_data.get("audit_cell_idx", -1)
-        }
+        try:
+            link_map = {
+                "통일경영공시": bank_data.get("unify_cell_idx", -1),
+                "감사보고서": bank_data.get("audit_cell_idx", -1)
+            }
 
-        for file_type, cell_idx in link_map.items():
-            if cell_idx == -1:
-                self.log(f"  {file_type} 링크 없음", 1)
-                result[file_type] = "링크없음"
-                continue
+            for file_type, cell_idx in link_map.items():
+                if cell_idx == -1:
+                    self.log(f"  {file_type} 링크 없음", 1)
+                    result[file_type] = "링크없음"
+                    continue
 
-            for retry in range(max_retries):
-                try:
-                    files_before = set(os.listdir(self.download_path))
+                for retry in range(max_retries):
+                    try:
+                        files_before = set(os.listdir(self.download_path))
 
-                    # JavaScript로 안전하게 클릭
-                    click_script = f"""
-                    const rows = document.querySelectorAll('{TABLE_SELECTOR}');
-                    const row = rows[{bank_data['index']}];
-                    const cells = row.querySelectorAll('td');
-                    const link = cells[{cell_idx}].querySelector('a');
-                    if (link) {{
-                        link.scrollIntoView({{block: 'center'}});
-                        link.click();
-                        return true;
-                    }}
-                    return false;
-                    """
+                        # JavaScript로 안전하게 클릭
+                        click_script = f"""
+                        const rows = document.querySelectorAll('{TABLE_SELECTOR}');
+                        const row = rows[{bank_data['index']}];
+                        const cells = row.querySelectorAll('td');
+                        const link = cells[{cell_idx}].querySelector('a');
+                        if (link) {{
+                            link.scrollIntoView({{block: 'center'}});
+                            link.click();
+                            return true;
+                        }}
+                        return false;
+                        """
 
-                    clicked = self.driver.execute_script(click_script)
+                        clicked = self.driver.execute_script(click_script)
 
-                    if not clicked:
-                        self.log(f"  클릭 실패 (시도 {retry + 1}/{max_retries})", 2)
-                        continue
+                        if not clicked:
+                            self.log(f"  클릭 실패 (시도 {retry + 1}/{max_retries})", 2)
+                            continue
 
-                    # 새 창 처리
-                    if len(self.driver.window_handles) > 1:
-                        self.driver.switch_to.window(self.driver.window_handles[-1])
-                        self.driver.close()
-                        self.driver.switch_to.window(self.driver.window_handles[0])
+                        # 새 창 처리
+                        if len(self.driver.window_handles) > 1:
+                            self.driver.switch_to.window(self.driver.window_handles[-1])
+                            self.driver.close()
+                            self.driver.switch_to.window(self.driver.window_handles[0])
 
-                    # 다운로드 대기
-                    if self.wait_for_downloads():
-                        files_after = set(os.listdir(self.download_path))
-                        new_files = files_after - files_before
-                        actual_files = [
-                            f for f in new_files
-                            if not f.endswith(('.crdownload', '.tmp', '.download', '.part'))
-                        ]
+                        # 다운로드 대기
+                        if self.wait_for_downloads():
+                            files_after = set(os.listdir(self.download_path))
+                            new_files = files_after - files_before
+                            actual_files = [
+                                f for f in new_files
+                                if not f.endswith(('.crdownload', '.tmp', '.download', '.part'))
+                            ]
 
-                        if actual_files:
-                            downloaded_file = max(
-                                actual_files,
-                                key=lambda f: os.path.getmtime(
-                                    os.path.join(self.download_path, f)
+                            if actual_files:
+                                downloaded_file = max(
+                                    actual_files,
+                                    key=lambda f: os.path.getmtime(
+                                        os.path.join(self.download_path, f)
+                                    )
                                 )
-                            )
 
-                            old_path = os.path.join(self.download_path, downloaded_file)
-                            ext = os.path.splitext(downloaded_file)[1] or '.pdf'
-                            safe_name = clean_filename(f"{bank_name}_{file_type}")
-                            new_filename = f"{safe_name}{ext}"
-                            new_path = os.path.join(self.download_path, new_filename)
-
-                            if os.path.exists(new_path):
-                                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                                new_filename = f"{safe_name}_{ts}{ext}"
+                                old_path = os.path.join(self.download_path, downloaded_file)
+                                ext = os.path.splitext(downloaded_file)[1] or '.pdf'
+                                safe_name = clean_filename(f"{bank_name}_{file_type}")
+                                new_filename = f"{safe_name}{ext}"
                                 new_path = os.path.join(self.download_path, new_filename)
 
-                            if self._rename_file(old_path, new_path):
-                                self.log(f"  {file_type} 다운로드 성공: {new_filename}", 1)
-                                downloaded += 1
-                                result[file_type] = "성공"
+                                if os.path.exists(new_path):
+                                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                                    new_filename = f"{safe_name}_{ts}{ext}"
+                                    new_path = os.path.join(self.download_path, new_filename)
+
+                                if self._rename_file(old_path, new_path):
+                                    self.log(f"  {file_type} 다운로드 성공: {new_filename}", 1)
+                                    downloaded += 1
+                                    result[file_type] = "성공"
+                                else:
+                                    self.log(f"  {file_type} 다운로드됨 (원본 파일명 유지)", 1)
+                                    downloaded += 1
+                                    result[file_type] = "성공(원본파일명)"
+                                break
                             else:
-                                self.log(f"  {file_type} 다운로드됨 (원본 파일명 유지)", 1)
-                                downloaded += 1
-                                result[file_type] = "성공(원본파일명)"
-                            break
+                                result[file_type] = "파일없음"
                         else:
-                            result[file_type] = "파일없음"
-                    else:
-                        result[file_type] = "타임아웃"
+                            result[file_type] = "타임아웃"
 
-                except StaleElementReferenceException:
-                    self.log(f"  DOM 변경 감지, 재시도... ({retry + 1})", 2)
-                    time.sleep(1)
-                except Exception as e:
-                    self.log(f"  {file_type} 오류: {str(e)[:50]}", 1)
-                    result[file_type] = f"오류: {str(e)[:30]}"
+                    except StaleElementReferenceException:
+                        self.log(f"  DOM 변경 감지, 재시도... ({retry + 1})", 2)
+                        time.sleep(1)
+                    except Exception as e:
+                        self.log(f"  {file_type} 오류: {str(e)[:50]}", 1)
+                        result[file_type] = f"오류: {str(e)[:30]}"
 
-            time.sleep(0.5)
+                time.sleep(0.5)
 
-        # 결과 판정
-        if downloaded == 2:
-            result["상태"] = "완료"
-        elif downloaded >= 1:
-            result["상태"] = "부분완료"
-        else:
-            result["상태"] = "실패"
+            # 결과 판정
+            if downloaded == 2:
+                result["상태"] = "완료"
+            elif downloaded >= 1:
+                result["상태"] = "부분완료"
+            else:
+                result["상태"] = "실패"
 
-        self.log(f"  → {bank_name}: {result['상태']} ({downloaded}개)", 1)
+            self.log(f"  → {bank_name}: {result['상태']} ({downloaded}개)", 1)
+
+        except Exception as e:
+            self.log(f"{bank_name} 처리 중 치명적 오류: {str(e)}", 1)
+            result["비고"] = str(e)[:50]
+
         self.results.append(result)
         return downloaded
 
@@ -583,13 +594,31 @@ class DisclosureDownloader:
 
             # 시스템 상태 체크
             if not check_system_health():
-                self.log("시스템 리소스 부족, 메모리 정리 중...", 1)
+                self.log(f"시스템 리소스 부족, 메모리 정리 중... ({get_memory_usage():.1f}%)", 1)
                 gc.collect()
+
+                # Chrome 메모리 정리
+                try:
+                    self.driver.execute_script("window.gc();")
+                except Exception:
+                    pass
+
+                # DOM 정리 (불필요한 요소 제거)
+                try:
+                    self.driver.execute_script("""
+                        document.querySelectorAll('img').forEach(img => img.remove());
+                        document.querySelectorAll('script').forEach(script => script.remove());
+                        document.querySelectorAll('style').forEach(style => style.remove());
+                    """)
+                except Exception:
+                    pass
+
                 time.sleep(3)
 
             # 5개마다 메모리 정리
             if i > 0 and i % 5 == 0:
                 gc.collect()
+                self.log(f"메모리 정리 완료 (현재: {get_memory_usage():.1f}%)", 2)
 
             # 주기적 페이지 새로고침 (DOM 초기화)
             if i > 0 and i % REFRESH_INTERVAL == 0:
