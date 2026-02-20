@@ -8,12 +8,14 @@ Streamlit 웹 앱 버전 v4.1
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import os
 import time
 import tempfile
 import threading
 import zipfile
+import base64
 from datetime import datetime
 
 # 엑셀 생성 모듈 임포트
@@ -389,8 +391,8 @@ def _get_default_download_path():
     return os.path.expanduser("~")
 
 
-def folder_picker(key_prefix, label="📂 파일 저장 경로", default_path=""):
-    """인터랙티브 폴더 브라우저 위젯
+def folder_picker(key_prefix, label="📂 서버 저장 경로", default_path=""):
+    """인터랙티브 폴더 브라우저 위젯 (서버 파일시스템)
 
     Args:
         key_prefix: 세션 상태 키 접두어 (고유해야 함)
@@ -416,13 +418,15 @@ def folder_picker(key_prefix, label="📂 파일 저장 경로", default_path=""
 
     selected_path = st.session_state[selected_key]
 
+    st.caption("💡 서버에 파일이 저장됩니다. 스크래핑 완료 후 다운로드 버튼으로 로컬 PC에 받을 수 있습니다.")
+
     # 경로 직접 입력 + 찾아보기 버튼
     col_input, col_btn = st.columns([5, 1])
     with col_input:
         typed_path = st.text_input(
             label,
             value=selected_path,
-            placeholder="경로를 직접 입력하거나 찾아보기를 클릭하세요",
+            placeholder="서버 경로를 직접 입력하거나 찾아보기를 클릭하세요",
             key=f"{key_prefix}_text_input"
         )
         # 사용자가 직접 경로를 입력/수정한 경우 반영
@@ -540,6 +544,35 @@ def format_elapsed_time(seconds):
         return f"{minutes}분 {secs}초"
     else:
         return f"{secs}초"
+
+
+def _auto_download_file(file_path, download_name):
+    """브라우저 자동 다운로드를 JavaScript로 트리거"""
+    if not file_path or not os.path.exists(file_path):
+        return
+    with open(file_path, 'rb') as f:
+        data = f.read()
+    b64 = base64.b64encode(data).decode()
+    # MIME 판별
+    if download_name.endswith('.xlsx'):
+        mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    elif download_name.endswith('.zip'):
+        mime = 'application/zip'
+    else:
+        mime = 'application/octet-stream'
+    components.html(
+        f"""
+        <script>
+        const link = document.createElement('a');
+        link.href = 'data:{mime};base64,{b64}';
+        link.download = '{download_name}';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        </script>
+        """,
+        height=0
+    )
 
 
 @st.fragment(run_every=2)
@@ -670,6 +703,8 @@ def init_session_state():
         }
     if '_scraping_thread' not in st.session_state:
         st.session_state._scraping_thread = None
+    if '_auto_downloaded' not in st.session_state:
+        st.session_state._auto_downloaded = False
 
 
 def main():
@@ -844,6 +879,17 @@ def main():
 
         st.divider()
 
+        # ===== 파일 저장 경로 설정 =====
+        st.markdown('<div class="section-title"><span class="material-symbols-outlined" style="font-size:20px;color:#eca413;">folder</span> 서버 저장 경로 설정</div>', unsafe_allow_html=True)
+
+        scraping_save_path = folder_picker("scraping_path", label="📂 스크래핑 파일 저장 경로")
+        st.session_state.scraping_save_path = scraping_save_path
+
+        disclosure_save_path_settings = folder_picker("disclosure_path", label="📂 공시파일 저장 경로")
+        st.session_state.disclosure_save_path = disclosure_save_path_settings
+
+        st.divider()
+
         # ===== 앱 정보 =====
         st.markdown('<div class="section-title"><span class="material-symbols-outlined" style="font-size:20px;color:#eca413;">info</span> 앱 정보</div>', unsafe_allow_html=True)
         st.markdown("""
@@ -971,8 +1017,7 @@ def main():
                 help="다운로드할 ZIP 파일의 이름을 지정하세요"
             )
 
-        scraping_save_path = folder_picker("scraping_path", label="📂 스크래핑 파일 저장 경로")
-        st.session_state.scraping_save_path = scraping_save_path
+        scraping_save_path = st.session_state.scraping_save_path
 
         col3, col4 = st.columns([1, 1])
         with col3:
@@ -1056,6 +1101,7 @@ def main():
                     st.error("스크래핑할 은행을 선택하세요.")
                 else:
                     st.session_state.ai_table_generated = False
+                    st.session_state._auto_downloaded = False
                     start_scraping(
                         selected_banks,
                         scrape_type,
@@ -1080,6 +1126,24 @@ def main():
             results = st.session_state.results
             success_count = sum(1 for r in results if r['success'])
             fail_count = len(results) - success_count
+
+            # 자동 다운로드: 스크래핑 완료 후 최초 1회
+            if not st.session_state._auto_downloaded and not st.session_state.scraping_running:
+                st.session_state._auto_downloaded = True
+                # ZIP 파일 자동 다운로드
+                if 'zip_path' in st.session_state and st.session_state.zip_path and os.path.exists(st.session_state.zip_path):
+                    _auto_download_file(
+                        st.session_state.zip_path,
+                        f"{download_filename}.zip"
+                    )
+                    st.toast("ZIP 파일이 자동으로 다운로드됩니다.", icon="📥")
+                # AI 엑셀 자동 다운로드
+                if st.session_state.summary_excel_path and os.path.exists(st.session_state.summary_excel_path):
+                    _auto_download_file(
+                        st.session_state.summary_excel_path,
+                        f"저축은행_분기총괄_{datetime.now().strftime('%Y%m%d')}.xlsx"
+                    )
+                    st.toast("분기총괄 엑셀이 자동으로 다운로드됩니다.", icon="📊")
 
             col1, col2, col3, col4 = st.columns(4)
             with col1:
@@ -1160,11 +1224,12 @@ def main():
             # ZIP 파일 다운로드
             if 'zip_path' in st.session_state and st.session_state.zip_path:
                 st.markdown("#### 📦 전체 데이터 압축 파일")
+                st.caption("아래 버튼을 클릭하면 브라우저 다운로드를 통해 로컬 PC에 저장됩니다.")
                 col1, col2, col3 = st.columns([1, 2, 1])
                 with col2:
                     with open(st.session_state.zip_path, 'rb') as f:
                         st.download_button(
-                            label="📥 결과 파일 다운로드 (ZIP)",
+                            label="📥 내 PC로 다운로드 (ZIP)",
                             data=f,
                             file_name=f"{download_filename}.zip",
                             mime="application/zip",
@@ -1188,9 +1253,7 @@ def main():
                 f"**대상 URL:** `{TARGET_URL}`"
             )
 
-            # 저장 경로 설정
-            disclosure_save_path = folder_picker("disclosure_path", label="📂 공시파일 저장 경로")
-            st.session_state.disclosure_save_path = disclosure_save_path
+            disclosure_save_path = st.session_state.disclosure_save_path
 
             st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
