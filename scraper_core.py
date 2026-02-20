@@ -66,11 +66,15 @@ class Config:
 
     CATEGORIES = ["영업개황", "재무현황", "손익현황", "기타"]
 
-    def __init__(self, scrape_type="quarterly"):
+    def __init__(self, scrape_type="quarterly", output_dir=None):
         self.today = datetime.now().strftime("%Y%m%d")
         self.scrape_type = scrape_type
         self.BASE_URL = self.QUARTERLY_URL if scrape_type == "quarterly" else self.SETTLEMENT_URL
-        self.output_dir = tempfile.mkdtemp(prefix=f"저축은행_{scrape_type}_")
+        if output_dir:
+            self.output_dir = os.path.abspath(output_dir)
+            os.makedirs(self.output_dir, exist_ok=True)
+        else:
+            self.output_dir = tempfile.mkdtemp(prefix=f"저축은행_{scrape_type}_")
 
 
 class WaitUtils:

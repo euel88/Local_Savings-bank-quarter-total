@@ -471,6 +471,10 @@ def init_session_state():
         st.session_state.disclosure_logs = []
     if 'disclosure_zip_path' not in st.session_state:
         st.session_state.disclosure_zip_path = None
+    if 'scraping_save_path' not in st.session_state:
+        st.session_state.scraping_save_path = ""
+    if 'disclosure_save_path' not in st.session_state:
+        st.session_state.disclosure_save_path = ""
 
 
 def main():
@@ -632,7 +636,7 @@ def main():
         # ========== 설정 섹션 ==========
         st.markdown('<div class="section-title"><span class="material-symbols-outlined" style="font-size:20px;color:#eca413;">tune</span> 스크래핑 설정</div>', unsafe_allow_html=True)
 
-        col1, col2, col3 = st.columns([1, 1, 1])
+        col1, col2 = st.columns([1, 1])
 
         with col1:
             scrape_type = st.selectbox(
@@ -648,9 +652,27 @@ def main():
                 value=f"저축은행_{scrape_type}_{datetime.now().strftime('%Y%m%d')}",
                 help="다운로드할 ZIP 파일의 이름을 지정하세요"
             )
-            st.caption("💡 파일은 브라우저 다운로드 폴더에 저장됩니다")
+
+        col3, col4 = st.columns([2, 1])
 
         with col3:
+            scraping_save_path = st.text_input(
+                "📂 파일 저장 경로",
+                value=st.session_state.scraping_save_path,
+                placeholder="예: /home/user/Downloads/scraping_data",
+                help="스크래핑 결과 파일이 저장될 폴더 경로를 지정하세요. 비워두면 임시 폴더에 저장됩니다.",
+                key="scraping_save_path_input"
+            )
+            st.session_state.scraping_save_path = scraping_save_path
+            if scraping_save_path:
+                if os.path.isdir(scraping_save_path):
+                    st.caption("✅ 유효한 경로입니다.")
+                else:
+                    st.caption("📁 해당 경로가 없으면 자동으로 생성됩니다.")
+            else:
+                st.caption("💡 비워두면 시스템 임시 폴더에 저장됩니다.")
+
+        with col4:
             auto_zip = st.checkbox("🗜️ 완료 후 자동 압축", value=True)
             save_md = st.checkbox("📝 MD 파일도 함께 생성", value=False)
 
@@ -764,7 +786,8 @@ def main():
                         auto_zip,
                         download_filename,
                         use_chatgpt=use_chatgpt,
-                        api_key=api_key
+                        api_key=api_key,
+                        save_path=scraping_save_path
                     )
 
         if st.session_state.scraping_running:
@@ -987,6 +1010,25 @@ def main():
                 f"**대상 URL:** `{TARGET_URL}`"
             )
 
+            # 저장 경로 설정
+            disclosure_save_path = st.text_input(
+                "📂 파일 저장 경로",
+                value=st.session_state.disclosure_save_path,
+                placeholder="예: /home/user/Downloads/disclosure_files",
+                help="공시파일이 저장될 폴더 경로를 지정하세요. 비워두면 임시 폴더에 저장됩니다.",
+                key="disclosure_save_path_input"
+            )
+            st.session_state.disclosure_save_path = disclosure_save_path
+            if disclosure_save_path:
+                if os.path.isdir(disclosure_save_path):
+                    st.caption("✅ 유효한 경로입니다.")
+                else:
+                    st.caption("📁 해당 경로가 없으면 자동으로 생성됩니다.")
+            else:
+                st.caption("💡 비워두면 시스템 임시 폴더에 저장됩니다.")
+
+            st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+
             col1, col2, col3 = st.columns([1, 2, 1])
             with col2:
                 disclosure_disabled = st.session_state.disclosure_running or st.session_state.scraping_running
@@ -997,7 +1039,7 @@ def main():
                     disabled=disclosure_disabled,
                     key="btn_disclosure_download"
                 ):
-                    run_disclosure_download()
+                    run_disclosure_download(disclosure_save_path)
 
             if st.session_state.disclosure_running:
                 st.info("⏳ 공시파일 다운로드가 진행 중입니다...")
@@ -1246,7 +1288,7 @@ def _display_validation_result(validation):
     st.caption("💡 엑셀 파일의 '정합성검증' 시트에서 전체 검증 결과를 확인할 수 있습니다.")
 
 
-def run_scraping(selected_banks, scrape_type, auto_zip, download_filename, use_chatgpt=False, api_key=None):
+def run_scraping(selected_banks, scrape_type, auto_zip, download_filename, use_chatgpt=False, api_key=None, save_path=None):
     """스크래핑 실행"""
     st.session_state.scraping_running = True
     st.session_state.results = []
@@ -1268,7 +1310,7 @@ def run_scraping(selected_banks, scrape_type, auto_zip, download_filename, use_c
         log_container = st.empty()
 
     try:
-        config = Config(scrape_type)
+        config = Config(scrape_type, output_dir=save_path if save_path else None)
         logger = StreamlitLogger()
         scraper = BankScraper(config, logger)
 
@@ -1383,14 +1425,18 @@ def run_scraping(selected_banks, scrape_type, auto_zip, download_filename, use_c
         st.session_state.scraping_running = False
 
 
-def run_disclosure_download():
+def run_disclosure_download(save_path=None):
     """통일경영공시/감사보고서 파일 다운로드 실행"""
     st.session_state.disclosure_running = True
     st.session_state.disclosure_results = []
     st.session_state.disclosure_logs = []
     st.session_state.disclosure_zip_path = None
 
-    download_path = tempfile.mkdtemp(prefix="저축은행_공시파일_")
+    if save_path:
+        download_path = os.path.abspath(save_path)
+        os.makedirs(download_path, exist_ok=True)
+    else:
+        download_path = tempfile.mkdtemp(prefix="저축은행_공시파일_")
     logs = []
 
     def log_callback(msg):
