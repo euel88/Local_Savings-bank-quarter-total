@@ -1,15 +1,18 @@
 """
 저축은행 중앙회 통일경영공시 데이터 스크래퍼
-Streamlit 웹 앱 버전 v4.0
+Streamlit 웹 앱 버전 v4.1
 - GPT-5.2 API 업그레이드
 - API 키 보안 저장 (.streamlit/secrets.toml / 환경변수)
 - 스크래핑 완료 후 AI 표 정리 및 엑셀 반환 옵션 추가
+- 통일경영공시/감사보고서 파일 다운로드 기능 추가
 """
 
 import streamlit as st
 import pandas as pd
 import os
 import time
+import tempfile
+import zipfile
 from datetime import datetime
 
 # 엑셀 생성 모듈 임포트
@@ -24,6 +27,13 @@ try:
 except ImportError:
     EXCEL_GENERATOR_AVAILABLE = False
     OPENAI_AVAILABLE = False
+
+# 공시파일 다운로드 모듈 임포트
+try:
+    from downloader_core import DisclosureDownloader, TARGET_URL
+    DOWNLOADER_AVAILABLE = True
+except ImportError:
+    DOWNLOADER_AVAILABLE = False
 
 
 def load_api_key():
@@ -212,6 +222,14 @@ def init_session_state():
         st.session_state.ai_table_generated = False
     if 'validation_result' not in st.session_state:
         st.session_state.validation_result = None
+    if 'disclosure_running' not in st.session_state:
+        st.session_state.disclosure_running = False
+    if 'disclosure_results' not in st.session_state:
+        st.session_state.disclosure_results = []
+    if 'disclosure_logs' not in st.session_state:
+        st.session_state.disclosure_logs = []
+    if 'disclosure_zip_path' not in st.session_state:
+        st.session_state.disclosure_zip_path = None
 
 
 def main():
@@ -490,6 +508,81 @@ def main():
 
     st.divider()
 
+    # ========== 공시파일 다운로드 섹션 ==========
+    st.markdown('<div class="section-title">📥 통일경영공시/감사보고서 파일 다운로드</div>', unsafe_allow_html=True)
+
+    if DOWNLOADER_AVAILABLE:
+        st.info(
+            "💡 저축은행중앙회 사이트에서 통일경영공시 파일과 감사(검토)보고서를 "
+            "자동으로 다운로드합니다. (Selenium 기반)"
+        )
+
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            disclosure_disabled = st.session_state.disclosure_running or st.session_state.scraping_running
+            if st.button(
+                "📥 공시파일 일괄 다운로드 시작",
+                type="secondary",
+                use_container_width=True,
+                disabled=disclosure_disabled
+            ):
+                run_disclosure_download()
+
+        if st.session_state.disclosure_running:
+            st.info("⏳ 공시파일 다운로드가 진행 중입니다...")
+
+        # 다운로드 결과 표시
+        if st.session_state.disclosure_results:
+            results = st.session_state.disclosure_results
+            success = len([r for r in results if r['상태'] == '완료'])
+            partial = len([r for r in results if r['상태'] == '부분완료'])
+            failed = len([r for r in results if r['상태'] == '실패'])
+
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("전체", f"{len(results)}개")
+            with col2:
+                st.metric("완료", f"{success}개")
+            with col3:
+                st.metric("부분완료", f"{partial}개")
+            with col4:
+                st.metric("실패", f"{failed}개")
+
+            # 결과 테이블
+            st.dataframe(
+                pd.DataFrame(results),
+                use_container_width=True,
+                hide_index=True
+            )
+
+            # ZIP 다운로드 버튼
+            if st.session_state.disclosure_zip_path and os.path.exists(st.session_state.disclosure_zip_path):
+                col1, col2, col3 = st.columns([1, 2, 1])
+                with col2:
+                    with open(st.session_state.disclosure_zip_path, 'rb') as f:
+                        st.download_button(
+                            label="📥 공시파일 ZIP 다운로드",
+                            data=f,
+                            file_name=f"저축은행_공시파일_{datetime.now().strftime('%Y%m%d')}.zip",
+                            mime="application/zip",
+                            use_container_width=True,
+                            type="primary"
+                        )
+
+        # 다운로드 로그
+        if st.session_state.disclosure_logs:
+            with st.expander("📝 다운로드 로그", expanded=False):
+                st.text_area(
+                    "로그",
+                    value="\n".join(st.session_state.disclosure_logs[-100:]),
+                    height=200,
+                    disabled=True
+                )
+    else:
+        st.warning("⚠️ 공시파일 다운로드 기능을 사용하려면 selenium 패키지가 필요합니다.")
+
+    st.divider()
+
     # ========== 로그 섹션 ==========
     with st.expander("📝 실행 로그 보기", expanded=False):
         if st.session_state.logs:
@@ -505,7 +598,7 @@ def main():
     # ========== 앱 정보 ==========
     with st.expander("ℹ️ 앱 정보", expanded=False):
         st.markdown("""
-        ### 저축은행 공시자료 크롤링 시스템 v4.0
+        ### 저축은행 공시자료 크롤링 시스템 v4.1
 
         **주요 기능:**
         - 79개 저축은행 분기공시/결산공시 데이터 자동 수집
@@ -515,6 +608,7 @@ def main():
         - 실시간 진행 상태 및 경과 시간 표시
         - GPT-5.2 API를 활용한 AI 표 정리 및 엑셀 자동 생성
         - API 키 보안 저장 지원 (.streamlit/secrets.toml, 환경변수)
+        - 통일경영공시/감사보고서 파일 일괄 다운로드
 
         **사용 방법:**
         1. 스크래핑 유형 선택 (분기공시/결산공시)
@@ -522,6 +616,7 @@ def main():
         3. '스크래핑 시작' 버튼 클릭
         4. 완료 후 결과 파일 다운로드
         5. (선택) AI 표 정리 버튼으로 데이터 분석 엑셀 생성
+        6. (선택) 공시파일 일괄 다운로드로 원본 파일 수집
 
         **API 키 설정:**
         - `.streamlit/secrets.toml` 파일에 `OPENAI_API_KEY = "sk-..."` 입력
@@ -731,6 +826,101 @@ def run_scraping(selected_banks, scrape_type, auto_zip, download_filename, use_c
 
     finally:
         st.session_state.scraping_running = False
+
+
+def run_disclosure_download():
+    """통일경영공시/감사보고서 파일 다운로드 실행"""
+    st.session_state.disclosure_running = True
+    st.session_state.disclosure_results = []
+    st.session_state.disclosure_logs = []
+    st.session_state.disclosure_zip_path = None
+
+    download_path = tempfile.mkdtemp(prefix="저축은행_공시파일_")
+    logs = []
+
+    def log_callback(msg):
+        logs.append(msg)
+
+    progress_container = st.container()
+    with progress_container:
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        log_area = st.empty()
+
+    try:
+        status_text.markdown("**📥 공시파일 다운로드 초기화 중...**")
+
+        downloader = DisclosureDownloader(
+            download_path=download_path,
+            log_callback=log_callback,
+            headless=True
+        )
+
+        # 은행 목록 추출
+        status_text.markdown("**🌐 웹사이트 접속 및 은행 목록 추출 중...**")
+        bank_list = downloader.start_and_extract_banks()
+
+        if not bank_list:
+            st.error("은행 목록을 추출할 수 없습니다.")
+            return
+
+        status_text.markdown(f"**📥 {len(bank_list)}개 은행 공시파일 다운로드 중...**")
+
+        # 다운로드 실행
+        def progress_callback(current, total, bank_name):
+            progress = (current + 1) / total
+            progress_bar.progress(progress)
+            status_text.markdown(f"**📥 처리 중:** {bank_name} ({current + 1}/{total})")
+            st.session_state.disclosure_logs = logs.copy()
+            log_area.text_area(
+                "실시간 로그",
+                value="\n".join(logs[-30:]),
+                height=150,
+                disabled=True,
+                key=f"dl_log_{current}"
+            )
+
+        total_downloaded = downloader.download_all(bank_list, progress_callback)
+
+        # 보고서 생성
+        downloader.create_report()
+
+        # 다운로드된 파일 ZIP 압축
+        downloaded_files = [
+            os.path.join(download_path, f)
+            for f in os.listdir(download_path)
+            if not f.endswith(('.json', '.tmp', '.crdownload'))
+        ]
+
+        if downloaded_files:
+            zip_path = os.path.join(
+                download_path,
+                f"저축은행_공시파일_{datetime.now().strftime('%Y%m%d')}.zip"
+            )
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for fpath in downloaded_files:
+                    if os.path.isfile(fpath) and not fpath.endswith('.zip'):
+                        zipf.write(fpath, os.path.basename(fpath))
+            st.session_state.disclosure_zip_path = zip_path
+
+        # 결과 저장
+        st.session_state.disclosure_results = downloader.results
+        st.session_state.disclosure_logs = logs
+
+        # 완료
+        progress_bar.progress(1.0)
+        success = len([r for r in downloader.results if r['상태'] in ['완료', '부분완료']])
+        status_text.markdown(f"**✅ 완료!** 성공: {success}/{len(bank_list)}, 총 {total_downloaded}개 파일")
+        st.success(f"🎉 공시파일 다운로드 완료! {total_downloaded}개 파일 다운로드됨")
+
+        downloader.cleanup()
+
+    except Exception as e:
+        st.error(f"❌ 공시파일 다운로드 중 오류: {str(e)}")
+        st.session_state.disclosure_logs = logs
+
+    finally:
+        st.session_state.disclosure_running = False
 
 
 if __name__ == "__main__":

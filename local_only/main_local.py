@@ -31,19 +31,28 @@ except ImportError as e:
     print(f"❌ 분기공시 스크래퍼 모듈 로드 실패: {e}")
     QUARTERLY_AVAILABLE = False
 
+try:
+    from disclosure_downloader import DisclosureDownloaderTab
+    DISCLOSURE_AVAILABLE = True
+    print("✅ 공시파일 다운로더 모듈 로드 성공")
+except ImportError as e:
+    print(f"❌ 공시파일 다운로더 모듈 로드 실패: {e}")
+    DISCLOSURE_AVAILABLE = False
+
 
 class SimpleBankScraperGUI:
     """단순화된 저축은행 스크래퍼 메인 GUI 클래스"""
 
     def __init__(self, root):
         self.root = root
-        self.root.title("🏦 저축은행 데이터 스크래퍼 v4.0")
+        self.root.title("🏦 저축은행 데이터 스크래퍼 v4.1")
         self.root.geometry("1000x700")
         self.root.resizable(True, True)
 
         # 탭 인스턴스 저장
         self.settlement_tab = None
         self.quarterly_tab = None
+        self.disclosure_tab = None
 
         # 스타일 설정
         self.setup_styles()
@@ -138,6 +147,26 @@ class SimpleBankScraperGUI:
                 justify=tk.CENTER
             ).pack(expand=True)
             self.notebook.add(placeholder_frame, text="📊 분기공시 (사용 불가)")
+
+        # 공시파일 다운로드 탭 추가
+        if DISCLOSURE_AVAILABLE:
+            try:
+                self.disclosure_tab = DisclosureDownloaderTab(self.notebook, simplified=True)
+                self.notebook.add(
+                    self.disclosure_tab.frame,
+                    text="📥 공시파일 다운로드"
+                )
+            except Exception as e:
+                messagebox.showerror("오류", f"공시파일 다운로더 탭을 로드할 수 없습니다: {str(e)}")
+        else:
+            placeholder_frame = ttk.Frame(self.notebook)
+            ttk.Label(
+                placeholder_frame,
+                text="❌ 공시파일 다운로더 모듈을 사용할 수 없습니다.\n\ndisclosure_downloader.py 파일을 확인해주세요.",
+                font=("", 12),
+                justify=tk.CENTER
+            ).pack(expand=True)
+            self.notebook.add(placeholder_frame, text="📥 공시파일 다운로드 (사용 불가)")
 
         # 하단 상태바
         status_frame = ttk.Frame(main_container)
