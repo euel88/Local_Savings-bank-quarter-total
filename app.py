@@ -372,38 +372,39 @@ st.markdown("""
     .folder-item .material-symbols-outlined {
         color: #eca413; font-size: 18px; flex-shrink: 0;
     }
-    .folder-selected-display {
-        display: flex; align-items: center; gap: 8px;
-        padding: 10px 14px;
-        background: #fcfaf8;
-        border: 1px solid #e7dfcf;
-        border-radius: 10px;
-        font-size: 0.85rem;
-        color: #1b170d;
-        min-height: 42px;
-    }
-    .folder-selected-display .material-symbols-outlined {
-        color: #eca413; font-size: 20px; flex-shrink: 0;
-    }
-    .folder-selected-display .path-text {
-        flex: 1;
-        word-break: break-all;
-        font-family: 'Manrope', monospace;
-        font-weight: 500;
-    }
-    .folder-selected-display .placeholder-text {
-        flex: 1; color: #9a804c; font-style: italic;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 
-def folder_picker(key_prefix, label="📂 파일 저장 경로"):
+def _get_default_download_path():
+    """OS에 맞는 기본 다운로드 폴더 경로를 반환"""
+    # Windows: C:/Users/<user>/Downloads
+    win_download = os.path.join(os.path.expanduser("~"), "Downloads")
+    if os.path.isdir(win_download):
+        return win_download
+
+    # 일반적인 Windows C드라이브 다운로드 폴더
+    for drive in ["C:", "D:"]:
+        candidate = os.path.join(drive, os.sep, "Users")
+        if os.path.isdir(candidate):
+            # Users 폴더 내 현재 사용자 찾기
+            username = os.environ.get("USERNAME", os.environ.get("USER", ""))
+            if username:
+                user_dl = os.path.join(candidate, username, "Downloads")
+                if os.path.isdir(user_dl):
+                    return user_dl
+
+    # fallback: 홈 디렉토리
+    return os.path.expanduser("~")
+
+
+def folder_picker(key_prefix, label="📂 파일 저장 경로", default_path=""):
     """인터랙티브 폴더 브라우저 위젯
 
     Args:
         key_prefix: 세션 상태 키 접두어 (고유해야 함)
         label: 위젯 라벨
+        default_path: 기본 선택 경로 (비어있으면 OS 다운로드 폴더)
 
     Returns:
         선택된 폴더 경로 (str) 또는 빈 문자열
@@ -413,35 +414,34 @@ def folder_picker(key_prefix, label="📂 파일 저장 경로"):
     nav_key = f"{key_prefix}_nav_path"
     selected_key = f"{key_prefix}_selected"
 
+    resolved_default = default_path if default_path else _get_default_download_path()
+
     if browse_key not in st.session_state:
         st.session_state[browse_key] = False
     if nav_key not in st.session_state:
-        st.session_state[nav_key] = os.path.expanduser("~")
+        st.session_state[nav_key] = resolved_default
     if selected_key not in st.session_state:
-        st.session_state[selected_key] = ""
+        st.session_state[selected_key] = resolved_default
 
     selected_path = st.session_state[selected_key]
 
-    # 선택된 경로 표시 + 찾아보기 버튼
-    col_display, col_btn = st.columns([5, 1])
-    with col_display:
-        st.markdown(f"**{label}**", unsafe_allow_html=True)
-        if selected_path:
-            st.markdown(f"""
-            <div class="folder-selected-display">
-                <span class="material-symbols-outlined">folder</span>
-                <span class="path-text">{selected_path}</span>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown("""
-            <div class="folder-selected-display">
-                <span class="material-symbols-outlined">folder_open</span>
-                <span class="placeholder-text">폴더를 선택하세요 (비워두면 임시 폴더 사용)</span>
-            </div>
-            """, unsafe_allow_html=True)
+    # 경로 직접 입력 + 찾아보기 버튼
+    col_input, col_btn = st.columns([5, 1])
+    with col_input:
+        typed_path = st.text_input(
+            label,
+            value=selected_path,
+            placeholder="경로를 직접 입력하거나 찾아보기를 클릭하세요",
+            key=f"{key_prefix}_text_input"
+        )
+        # 사용자가 직접 경로를 입력/수정한 경우 반영
+        if typed_path != selected_path:
+            st.session_state[selected_key] = typed_path
+            if os.path.isdir(typed_path):
+                st.session_state[nav_key] = typed_path
+            selected_path = typed_path
     with col_btn:
-        st.markdown("<div style='height:1.5rem'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='height:1.6rem'></div>", unsafe_allow_html=True)
         browse_label = "📂 찾아보기" if not st.session_state[browse_key] else "✕ 닫기"
         if st.button(browse_label, key=f"{key_prefix}_toggle_btn", use_container_width=True):
             st.session_state[browse_key] = not st.session_state[browse_key]
@@ -470,12 +470,12 @@ def folder_picker(key_prefix, label="📂 파일 저장 경로"):
                     st.session_state[nav_key] = parent
                     st.rerun()
         with nav_c2:
-            if st.button("🏠 홈", key=f"{key_prefix}_home", use_container_width=True):
-                st.session_state[nav_key] = os.path.expanduser("~")
+            if st.button("📥 Downloads", key=f"{key_prefix}_home", use_container_width=True):
+                st.session_state[nav_key] = _get_default_download_path()
                 st.rerun()
         with nav_c3:
-            if st.button("💾 루트", key=f"{key_prefix}_root", use_container_width=True):
-                st.session_state[nav_key] = "/"
+            if st.button("🏠 홈", key=f"{key_prefix}_root", use_container_width=True):
+                st.session_state[nav_key] = os.path.expanduser("~")
                 st.rerun()
         with nav_c4:
             if st.button("✅ 이 폴더 선택", key=f"{key_prefix}_select", type="primary", use_container_width=True):
@@ -526,10 +526,11 @@ def folder_picker(key_prefix, label="📂 파일 저장 경로"):
                 else:
                     st.warning("폴더 이름을 입력하세요.")
 
-        # 선택 해제 버튼
-        if selected_path:
-            if st.button("🗑️ 선택 해제 (임시 폴더 사용)", key=f"{key_prefix}_clear", use_container_width=True):
-                st.session_state[selected_key] = ""
+        # 기본 경로로 초기화 버튼
+        if selected_path != resolved_default:
+            if st.button("🔄 기본 경로로 초기화 (Downloads)", key=f"{key_prefix}_clear", use_container_width=True):
+                st.session_state[selected_key] = resolved_default
+                st.session_state[nav_key] = resolved_default
                 st.session_state[browse_key] = False
                 st.rerun()
 
