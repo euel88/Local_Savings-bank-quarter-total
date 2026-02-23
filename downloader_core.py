@@ -144,6 +144,10 @@ class DisclosureDownloader:
         chrome_options.add_argument('--ignore-certificate-errors')
         chrome_options.add_argument('--disable-web-security')
 
+        # 고유한 user-data-dir로 Chrome 프로필 잠금 충돌 방지 (동시 실행 지원)
+        self._chrome_user_data_dir = tempfile.mkdtemp(prefix="chrome_downloader_")
+        chrome_options.add_argument(f'--user-data-dir={self._chrome_user_data_dir}')
+
         if self.headless:
             chrome_options.add_argument('--headless=new')
 
@@ -756,5 +760,12 @@ class DisclosureDownloader:
             except Exception:
                 pass
             self.driver = None
+        # Chrome 임시 프로필 디렉토리 정리
+        chrome_dir = getattr(self, '_chrome_user_data_dir', None)
+        if chrome_dir and os.path.exists(chrome_dir):
+            try:
+                shutil.rmtree(chrome_dir, ignore_errors=True)
+            except Exception:
+                pass
         gc.collect()
         self.log("리소스 정리 완료")
