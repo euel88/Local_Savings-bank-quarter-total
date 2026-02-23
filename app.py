@@ -721,35 +721,56 @@ def _render_disclosure_progress():
 
 
 @st.fragment(run_every=3)
-def _render_global_scraping_banner():
-    """페이지와 관계없이 표시되는 스크래핑 진행 배너"""
-    shared = st.session_state.get('_scraping_shared', {})
-    is_running = shared.get('scraping_running', False)
-    if not is_running:
-        if st.session_state.scraping_running:
-            _sync_shared_to_session()
-            st.rerun()
-        return
+def _render_global_task_banner():
+    """페이지와 관계없이 표시되는 작업 진행 배너 (스크래핑 + 다운로드 각각 표시)"""
+    # --- 스크래핑 배너 ---
+    scraping_shared = st.session_state.get('_scraping_shared', {})
+    scraping_running = scraping_shared.get('scraping_running', False)
 
-    progress = shared.get('scraping_progress', {})
-    phase = progress.get('phase', '')
-    current_idx = progress.get('current_idx', 0)
-    total = progress.get('total_banks', 1) or 1
-    current_bank = progress.get('current_bank', '')
-    start_time = progress.get('start_time', 0)
+    if scraping_running:
+        progress = scraping_shared.get('scraping_progress', {})
+        phase = progress.get('phase', '')
+        current_idx = progress.get('current_idx', 0)
+        total = progress.get('total_banks', 1) or 1
+        current_bank = progress.get('current_bank', '')
+        start_time = progress.get('start_time', 0)
+        elapsed = time.time() - start_time if start_time else 0
 
-    elapsed = time.time() - start_time if start_time else 0
+        if phase == 'scraping':
+            msg = f"🔄 스크래핑 진행 중: **{current_bank}** ({current_idx}/{total}) — ⏱️ {format_elapsed_time(elapsed)}"
+        elif phase == 'zipping':
+            msg = f"📦 파일 압축 중... — ⏱️ {format_elapsed_time(elapsed)}"
+        elif phase == 'ai_excel':
+            msg = f"🤖 GPT-5.2 엑셀 생성 중... — ⏱️ {format_elapsed_time(elapsed)}"
+        else:
+            msg = f"🔄 스크래핑 진행 중... — ⏱️ {format_elapsed_time(elapsed)}"
+        st.info(msg)
+    elif st.session_state.scraping_running:
+        _sync_shared_to_session()
+        st.rerun()
 
-    if phase == 'scraping':
-        msg = f"🔄 스크래핑 진행 중: **{current_bank}** ({current_idx}/{total}) — ⏱️ {format_elapsed_time(elapsed)}"
-    elif phase == 'zipping':
-        msg = f"📦 파일 압축 중... — ⏱️ {format_elapsed_time(elapsed)}"
-    elif phase == 'ai_excel':
-        msg = f"🤖 GPT-5.2 엑셀 생성 중... — ⏱️ {format_elapsed_time(elapsed)}"
-    else:
-        msg = f"🔄 스크래핑 진행 중... — ⏱️ {format_elapsed_time(elapsed)}"
+    # --- 다운로드 배너 ---
+    disclosure_shared = st.session_state.get('_disclosure_shared', {})
+    disclosure_running = disclosure_shared.get('running', False)
 
-    st.info(msg)
+    if disclosure_running:
+        dl_progress = disclosure_shared.get('progress', {})
+        dl_phase = dl_progress.get('phase', '')
+        dl_current = dl_progress.get('current_idx', 0)
+        dl_total = dl_progress.get('total_banks', 1) or 1
+        dl_bank = dl_progress.get('current_bank', '')
+        dl_start = dl_progress.get('start_time', 0)
+        dl_elapsed = time.time() - dl_start if dl_start else 0
+
+        if dl_phase in ('init', 'extracting'):
+            dl_msg = f"📥 공시파일 다운로드 준비 중... — ⏱️ {format_elapsed_time(dl_elapsed)}"
+        elif dl_phase == 'downloading':
+            dl_msg = f"📥 공시파일 다운로드 중: **{dl_bank}** ({dl_current}/{dl_total}) — ⏱️ {format_elapsed_time(dl_elapsed)}"
+        elif dl_phase == 'zipping':
+            dl_msg = f"📦 공시파일 압축 중... — ⏱️ {format_elapsed_time(dl_elapsed)}"
+        else:
+            dl_msg = f"📥 공시파일 다운로드 진행 중... — ⏱️ {format_elapsed_time(dl_elapsed)}"
+        st.info(dl_msg)
 
 
 def init_session_state():
@@ -889,9 +910,9 @@ def main():
         st.session_state.sidebar_page = "dashboard"
         current_page = "dashboard"
 
-    # 스크래핑 진행 중이면 Dashboard 외 페이지에서 글로벌 배너 표시
-    if st.session_state.scraping_running and current_page != "dashboard":
-        _render_global_scraping_banner()
+    # 작업 진행 중이면 Dashboard 외 페이지에서 글로벌 배너 표시
+    if (st.session_state.scraping_running or st.session_state.get('disclosure_running', False)) and current_page != "dashboard":
+        _render_global_task_banner()
 
     # --- Data Logs 페이지 ---
     if current_page == "logs":
@@ -1039,29 +1060,39 @@ def main():
     st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
     # ========== Stat Cards ==========
-    stat_col1, stat_col2, stat_col3 = st.columns(3)
-
-    # Calculate live stats (진행 중이면 shared dict의 partial_results 참조)
-    shared = st.session_state.get('_scraping_shared', {})
+    # Calculate live stats
+    scraping_shared = st.session_state.get('_scraping_shared', {})
+    disclosure_shared = st.session_state.get('_disclosure_shared', {})
     is_scraping = st.session_state.scraping_running
     is_disclosure = st.session_state.get('disclosure_running', False)
     selected_count = len(st.session_state.selected_banks)
-    live_results = shared.get('scraping_progress', {}).get('partial_results', []) if is_scraping else st.session_state.results
+    live_results = scraping_shared.get('scraping_progress', {}).get('partial_results', []) if is_scraping else st.session_state.results
     data_collected = sum(1 for r in live_results if r.get('success', False)) if live_results else 0
     total_records = len(live_results) if live_results else 0
 
+    both_running = is_scraping and is_disclosure
+
+    if both_running:
+        # 동시 실행: 4개 카드 (스크래핑 진행 / 스크래핑 수집 / 다운로드 진행 / 시스템)
+        stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
+    else:
+        stat_col1, stat_col2, stat_col3 = st.columns(3)
+        stat_col4 = None
+
+    # --- 카드 1: 스크래핑 진행 현황 ---
     with stat_col1:
         if is_scraping:
-            crawl_badge = f'<span class="stat-card-badge badge-green">진행 중</span>'
-            crawl_value = f"{shared.get('scraping_progress', {}).get('current_idx', 0)} <span>/ {selected_count}</span>"
-        elif is_disclosure:
-            dl_progress = st.session_state.get('_disclosure_shared', {}).get('progress', {})
+            scraping_progress = scraping_shared.get('scraping_progress', {})
+            crawl_badge = '<span class="stat-card-badge badge-green">스크래핑 중</span>'
+            crawl_value = f"{scraping_progress.get('current_idx', 0)} <span>/ {selected_count}</span>"
+        elif not both_running and is_disclosure:
+            dl_progress = disclosure_shared.get('progress', {})
             dl_current = dl_progress.get('current_idx', 0)
             dl_total = dl_progress.get('total_banks', 0)
-            crawl_badge = f'<span class="stat-card-badge badge-green">다운로드 중</span>'
+            crawl_badge = '<span class="stat-card-badge badge-green">다운로드 중</span>'
             crawl_value = f"{dl_current} <span>/ {dl_total}</span>" if dl_total > 0 else "준비 중"
         else:
-            crawl_badge = f'<span class="stat-card-badge badge-amber">대기</span>'
+            crawl_badge = '<span class="stat-card-badge badge-amber">대기</span>'
             crawl_value = f"{selected_count} <span>선택됨</span>"
         st.markdown(f"""
         <div class="stat-card">
@@ -1072,14 +1103,25 @@ def main():
                 {crawl_badge}
             </div>
             <div style="margin-top:1rem; position:relative; z-index:1;">
-                <p class="stat-card-label">진행 현황</p>
+                <p class="stat-card-label">{'스크래핑 현황' if both_running or is_scraping else '진행 현황'}</p>
                 <p class="stat-card-value">{crawl_value}</p>
             </div>
         </div>
         """, unsafe_allow_html=True)
 
+    # --- 카드 2: 수집 데이터 (스크래핑) / 동시 실행 시에도 스크래핑 수집 ---
     with stat_col2:
-        if data_collected > 0 or total_records > 0:
+        if both_running:
+            # 동시 실행: 스크래핑 수집 데이터
+            if data_collected > 0 or total_records > 0:
+                display_data = f"{data_collected}"
+                today_count = f"{data_collected}/{total_records} 완료"
+                data_badge_class = "badge-green"
+            else:
+                display_data = "0"
+                today_count = "수집 중"
+                data_badge_class = "badge-amber"
+        elif data_collected > 0 or total_records > 0:
             display_data = f"{data_collected}"
             today_count = f"{data_collected}/{total_records} 완료"
             data_badge_class = "badge-green"
@@ -1102,34 +1144,84 @@ def main():
         </div>
         """, unsafe_allow_html=True)
 
+    # --- 카드 3: 동시 실행 시 다운로드 진행 / 단독 실행 시 시스템 상태 ---
     with stat_col3:
-        if is_scraping or is_disclosure:
-            health_badge = '<span class="stat-card-badge badge-green">실행 중</span>'
-            health_icon = "play_circle"
-            health_label = "실행 중"
-        elif data_collected > 0 and total_records > 0:
-            success_rate = round(data_collected / total_records * 100, 1)
-            health_badge = f'<span class="stat-card-badge badge-green">완료</span>'
-            health_icon = "check_circle"
-            health_label = f"성공률 {success_rate}%"
-        else:
-            health_badge = '<span class="stat-card-badge badge-amber">대기</span>'
-            health_icon = "hourglass_empty"
-            health_label = "대기 중"
-        st.markdown(f"""
-        <div class="stat-card">
-            <div style="display:flex; justify-content:space-between; align-items:flex-start; position:relative; z-index:1;">
-                <div class="stat-card-icon">
-                    <span class="material-symbols-outlined">{health_icon}</span>
+        if both_running:
+            # 동시 실행: 다운로드 진행 현황
+            dl_progress = disclosure_shared.get('progress', {})
+            dl_current = dl_progress.get('current_idx', 0)
+            dl_total = dl_progress.get('total_banks', 0)
+            dl_phase = dl_progress.get('phase', '')
+            if dl_phase in ('init', 'extracting'):
+                dl_badge = '<span class="stat-card-badge badge-amber">준비 중</span>'
+                dl_value = "초기화 중"
+            else:
+                dl_badge = '<span class="stat-card-badge badge-green">다운로드 중</span>'
+                dl_value = f"{dl_current} <span>/ {dl_total}</span>" if dl_total > 0 else "준비 중"
+            st.markdown(f"""
+            <div class="stat-card">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; position:relative; z-index:1;">
+                    <div class="stat-card-icon">
+                        <span class="material-symbols-outlined">download</span>
+                    </div>
+                    {dl_badge}
                 </div>
-                {health_badge}
+                <div style="margin-top:1rem; position:relative; z-index:1;">
+                    <p class="stat-card-label">다운로드 현황</p>
+                    <p class="stat-card-value">{dl_value}</p>
+                </div>
             </div>
-            <div style="margin-top:1rem; position:relative; z-index:1;">
-                <p class="stat-card-label">시스템 상태</p>
-                <p class="stat-card-value">{health_label}</p>
+            """, unsafe_allow_html=True)
+        else:
+            # 단독 실행 또는 대기: 시스템 상태
+            if is_scraping or is_disclosure:
+                health_badge = '<span class="stat-card-badge badge-green">실행 중</span>'
+                health_icon = "play_circle"
+                health_label = "실행 중"
+            elif data_collected > 0 and total_records > 0:
+                success_rate = round(data_collected / total_records * 100, 1)
+                health_badge = '<span class="stat-card-badge badge-green">완료</span>'
+                health_icon = "check_circle"
+                health_label = f"성공률 {success_rate}%"
+            else:
+                health_badge = '<span class="stat-card-badge badge-amber">대기</span>'
+                health_icon = "hourglass_empty"
+                health_label = "대기 중"
+            st.markdown(f"""
+            <div class="stat-card">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; position:relative; z-index:1;">
+                    <div class="stat-card-icon">
+                        <span class="material-symbols-outlined">{health_icon}</span>
+                    </div>
+                    {health_badge}
+                </div>
+                <div style="margin-top:1rem; position:relative; z-index:1;">
+                    <p class="stat-card-label">시스템 상태</p>
+                    <p class="stat-card-value">{health_label}</p>
+                </div>
             </div>
-        </div>
-        """, unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
+
+    # --- 카드 4: 동시 실행 시에만 표시되는 시스템 상태 ---
+    if stat_col4 is not None:
+        with stat_col4:
+            health_badge = '<span class="stat-card-badge badge-green">동시 실행 중</span>'
+            health_icon = "play_circle"
+            health_label = "2개 작업"
+            st.markdown(f"""
+            <div class="stat-card">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; position:relative; z-index:1;">
+                    <div class="stat-card-icon">
+                        <span class="material-symbols-outlined">{health_icon}</span>
+                    </div>
+                    {health_badge}
+                </div>
+                <div style="margin-top:1rem; position:relative; z-index:1;">
+                    <p class="stat-card-label">시스템 상태</p>
+                    <p class="stat-card-value">{health_label}</p>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
 
     st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
 
