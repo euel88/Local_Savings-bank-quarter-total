@@ -38,6 +38,12 @@ try:
 except ImportError:
     DOWNLOADER_AVAILABLE = False
 
+try:
+    from pdf_delinquency_extractor import create_delinquency_excel, PDFPLUMBER_AVAILABLE
+    PDF_EXTRACTOR_AVAILABLE = PDFPLUMBER_AVAILABLE
+except ImportError:
+    PDF_EXTRACTOR_AVAILABLE = False
+
 
 def load_api_key():
     """API 키를 secrets.toml 또는 환경변수에서 로드"""
@@ -684,6 +690,7 @@ def _render_disclosure_progress():
             st.session_state.disclosure_results = shared.get('results', [])
             st.session_state.disclosure_logs = shared.get('logs', [])
             st.session_state.disclosure_zip_path = shared.get('zip_path')
+            st.session_state.delinquency_excel_path = shared.get('delinquency_excel_path')
         if phase == 'done':
             st.success("✅ 공시파일 다운로드 완료! 아래에서 결과를 확인하세요.")
         else:
@@ -700,6 +707,9 @@ def _render_disclosure_progress():
         phase_text = f"📥 다운로드 중: **{current_bank}** ({current_idx}/{total})"
     elif phase == 'zipping':
         phase_text = "📦 파일 압축 중..."
+        pct = 1.0
+    elif phase == 'extracting_pdf':
+        phase_text = "📄 통일경영공시 PDF에서 연체율 추출 중..."
         pct = 1.0
     else:
         phase_text = "준비 중..."
@@ -774,6 +784,8 @@ def _render_global_task_banner():
             dl_msg = f"📥 공시파일 다운로드 중: **{dl_bank}** ({dl_current}/{dl_total}) — ⏱️ {format_elapsed_time(dl_elapsed)}"
         elif dl_phase == 'zipping':
             dl_msg = f"📦 공시파일 압축 중... — ⏱️ {format_elapsed_time(dl_elapsed)}"
+        elif dl_phase == 'extracting_pdf':
+            dl_msg = f"📄 PDF 연체율 추출 중... — ⏱️ {format_elapsed_time(dl_elapsed)}"
         else:
             dl_msg = f"📥 공시파일 다운로드 진행 중... — ⏱️ {format_elapsed_time(dl_elapsed)}"
         st.info(dl_msg)
@@ -809,6 +821,8 @@ def init_session_state():
         st.session_state.disclosure_logs = []
     if 'disclosure_zip_path' not in st.session_state:
         st.session_state.disclosure_zip_path = None
+    if 'delinquency_excel_path' not in st.session_state:
+        st.session_state.delinquency_excel_path = None
     if '_disclosure_shared' not in st.session_state:
         st.session_state._disclosure_shared = {}
     if '_disclosure_thread' not in st.session_state:
@@ -1549,6 +1563,7 @@ def main():
             dl_results = st.session_state.disclosure_results or dl_shared.get('results', [])
             dl_zip_path = st.session_state.disclosure_zip_path or dl_shared.get('zip_path')
             dl_logs = st.session_state.disclosure_logs or dl_shared.get('logs', [])
+            delinquency_path = st.session_state.delinquency_excel_path or dl_shared.get('delinquency_excel_path')
 
             if dl_results:
                 st.divider()
@@ -1594,6 +1609,29 @@ def main():
                             st.caption(f"파일 크기: {zip_size / (1024*1024):.1f} MB")
                     else:
                         st.warning("ZIP 파일이 비어있습니다. 다운로드된 파일이 없을 수 있습니다.")
+
+                # 연체율 엑셀 다운로드 버튼
+                if delinquency_path and os.path.exists(delinquency_path):
+                    st.markdown("#### 📄 연체율 요약 엑셀")
+                    try:
+                        dq_df = pd.read_excel(delinquency_path, sheet_name='연체율')
+                        st.dataframe(dq_df, width="stretch", hide_index=True)
+                    except Exception:
+                        pass
+
+                    col1, col2, col3 = st.columns([1, 2, 1])
+                    with col2:
+                        with open(delinquency_path, 'rb') as f:
+                            dq_bytes = f.read()
+                        st.download_button(
+                            label="📄 연체율 엑셀 다운로드",
+                            data=dq_bytes,
+                            file_name=f"저축은행_연체율_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            width="stretch",
+                            type="secondary",
+                            key="btn_delinquency_excel"
+                        )
 
             # 다운로드 로그
             if dl_logs:
@@ -1921,6 +1959,7 @@ def _start_disclosure_download(save_path=None):
     st.session_state.disclosure_results = []
     st.session_state.disclosure_logs = []
     st.session_state.disclosure_zip_path = None
+    st.session_state.delinquency_excel_path = None
     st.session_state._disclosure_auto_downloaded = False
     st.session_state.pop('_disclosure_zip_bytes', None)
 
@@ -2019,6 +2058,20 @@ def _disclosure_worker(shared, save_path=None):
         shared['results'] = list(downloader.results) if hasattr(downloader, 'results') else []
         success = len([r for r in shared['results'] if r.get('상태') in ['완료', '부분완료']])
         log_callback(f"완료! 성공: {success}/{total}, 총 {total_downloaded}개 파일 다운로드")
+
+        # 통일경영공시 PDF에서 연체율 추출 → 별도 엑셀 생성
+        if PDF_EXTRACTOR_AVAILABLE:
+            progress['phase'] = 'extracting_pdf'
+            log_callback("통일경영공시 PDF에서 연체율 추출 중...")
+            try:
+                delinquency_path = create_delinquency_excel(
+                    download_path=download_path,
+                    log_callback=log_callback
+                )
+                if delinquency_path:
+                    shared['delinquency_excel_path'] = delinquency_path
+            except Exception as e:
+                log_callback(f"연체율 추출 오류: {str(e)}")
 
         downloader.cleanup()
 
