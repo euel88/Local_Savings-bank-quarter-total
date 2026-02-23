@@ -629,6 +629,10 @@ def _render_scraping_progress():
     pct = current_idx / total
     if phase == 'scraping':
         phase_text = f"처리 중: **{current_bank}** ({current_idx}/{total})"
+    elif phase == 'retrying':
+        retry_round = progress.get('retry_round', 1)
+        retry_total = progress.get('retry_total_rounds', 2)
+        phase_text = f"🔄 재시도({retry_round}/{retry_total}): **{current_bank}** ({current_idx}/{total})"
     elif phase == 'zipping':
         phase_text = "📦 파일 압축 중..."
         pct = 1.0
@@ -652,7 +656,10 @@ def _render_scraping_progress():
     if partial_results:
         success = sum(1 for r in partial_results if r.get('success'))
         fail = len(partial_results) - success
-        st.caption(f"현재까지: 성공 {success}개 / 실패 {fail}개 / 전체 {total}개")
+        total_banks = progress.get('total_banks', total)
+        # 전체 은행 수 기준 (재시도 중에는 partial_results가 전체 목록)
+        all_total = len(partial_results) if len(partial_results) > total_banks else total_banks
+        st.caption(f"현재까지: 성공 {success}개 / 실패 {fail}개 / 전체 {all_total}개")
 
 
 @st.fragment(run_every=2)
@@ -733,6 +740,9 @@ def _render_global_task_banner():
 
         if phase == 'scraping':
             msg = f"🔄 스크래핑 진행 중: **{current_bank}** ({current_idx}/{total}) — ⏱️ {format_elapsed_time(elapsed)}"
+        elif phase == 'retrying':
+            retry_round = progress.get('retry_round', 1)
+            msg = f"🔄 실패 은행 재시도({retry_round}차): **{current_bank}** ({current_idx}/{total}) — ⏱️ {format_elapsed_time(elapsed)}"
         elif phase == 'zipping':
             msg = f"📦 파일 압축 중... — ⏱️ {format_elapsed_time(elapsed)}"
         elif phase == 'ai_excel':
@@ -1721,6 +1731,69 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
             shared['logs'] = logger.messages.copy()
 
             time.sleep(0.5)
+
+        # ========== 실패 은행 자동 재시도 ==========
+        MAX_RETRY_ROUNDS = 2
+        for retry_round in range(1, MAX_RETRY_ROUNDS + 1):
+            failed_indices = [i for i, r in enumerate(results) if not r.get('success')]
+            if not failed_indices:
+                break
+
+            failed_banks = [results[i]['bank'] for i in failed_indices]
+            logger.log_message(
+                f"\n{'='*40}\n"
+                f"[재시도 {retry_round}/{MAX_RETRY_ROUNDS}] "
+                f"실패 은행 {len(failed_banks)}개 재시도: {', '.join(failed_banks)}\n"
+                f"{'='*40}"
+            )
+            shared['logs'] = logger.messages.copy()
+
+            progress['phase'] = 'retrying'
+            progress['retry_round'] = retry_round
+            progress['retry_total_rounds'] = MAX_RETRY_ROUNDS
+            progress['total_banks'] = len(failed_banks)
+
+            for retry_idx, orig_idx in enumerate(failed_indices):
+                bank = results[orig_idx]['bank']
+                progress['current_bank'] = bank
+                progress['current_idx'] = retry_idx + 1
+
+                elapsed = time.time() - start_time
+                shared['elapsed_time'] = elapsed
+
+                logger.log_message(f"[재시도 {retry_round}] {bank} 스크래핑 재시도...")
+                shared['logs'] = logger.messages.copy()
+
+                time.sleep(1)  # 재시도 전 잠시 대기
+
+                filepath, success, date_info = scraper.scrape_bank(bank)
+
+                if success:
+                    results[orig_idx] = {
+                        'bank': bank,
+                        'success': True,
+                        'filepath': filepath,
+                        'date_info': date_info
+                    }
+                    bank_dates[bank] = date_info
+                    logger.log_message(f"[재시도 성공] {bank} - 공시일: {date_info}")
+                else:
+                    logger.log_message(f"[재시도 실패] {bank}")
+
+                progress['partial_results'] = list(results)
+                shared['logs'] = logger.messages.copy()
+
+                time.sleep(0.5)
+
+        # 최종 실패 은행 로그
+        final_failed = [r['bank'] for r in results if not r.get('success')]
+        if final_failed:
+            logger.log_message(
+                f"\n⚠️ 최종 실패 은행 {len(final_failed)}개: {', '.join(final_failed)}"
+            )
+        else:
+            logger.log_message("\n✅ 모든 은행 스크래핑 성공!")
+        shared['logs'] = logger.messages.copy()
 
         # 최종 경과 시간
         final_elapsed = time.time() - start_time
