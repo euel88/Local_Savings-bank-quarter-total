@@ -16,6 +16,7 @@ import io
 from contextlib import contextmanager
 from pathlib import Path
 import tempfile
+import threading
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -31,15 +32,22 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
+_stderr_lock = threading.Lock()
+
 @contextmanager
 def suppress_stderr():
-    """표준 에러 출력을 임시로 억제합니다."""
+    """표준 에러 출력을 임시로 억제합니다 (스레드 안전)."""
+    if not _stderr_lock.acquire(blocking=False):
+        # 다른 스레드가 stderr를 사용 중이면 억제하지 않고 진행
+        yield
+        return
     original_stderr = sys.stderr
     sys.stderr = io.StringIO()
     try:
         yield
     finally:
         sys.stderr = original_stderr
+        _stderr_lock.release()
 
 
 class Config:
@@ -117,7 +125,7 @@ class StreamlitLogger:
 
 
 def create_driver():
-    """Streamlit Cloud 환경에 맞는 Chrome 드라이버 생성"""
+    """Streamlit Cloud 환경에 맞는 Chrome 드라이버 생성 (고유 프로필 사용)"""
     with suppress_stderr():
         options = webdriver.ChromeOptions()
         options.add_argument('--headless=new')
@@ -125,6 +133,10 @@ def create_driver():
         options.add_argument('--disable-dev-shm-usage')
         options.add_argument('--disable-gpu')
         options.add_argument('--window-size=1280,800')
+
+        # 고유한 user-data-dir로 Chrome 프로필 잠금 충돌 방지
+        user_data_dir = tempfile.mkdtemp(prefix="chrome_scraper_")
+        options.add_argument(f'--user-data-dir={user_data_dir}')
         options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
         options.add_argument('--log-level=3')
         options.add_argument('--silent')
@@ -449,10 +461,23 @@ class BankScraper:
             return None, False, date_info
         finally:
             if driver:
+                # user-data-dir 경로 보존 후 드라이버 종료
+                user_data_dir = None
+                for arg in driver.options.arguments:
+                    if arg.startswith('--user-data-dir='):
+                        user_data_dir = arg.split('=', 1)[1]
+                        break
                 try:
                     driver.quit()
                 except:
                     pass
+                # Chrome 임시 프로필 정리
+                if user_data_dir and os.path.exists(user_data_dir):
+                    import shutil
+                    try:
+                        shutil.rmtree(user_data_dir, ignore_errors=True)
+                    except:
+                        pass
 
     def scrape_multiple_banks(self, banks, progress_callback=None):
         """여러 은행 스크래핑"""

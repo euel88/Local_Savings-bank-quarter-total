@@ -653,7 +653,7 @@ def _render_scraping_progress():
 
     # 완료 시 shared → session_state 동기화 후 페이지 전체 리로드
     is_running = shared.get('scraping_running', False)
-    if not is_running:
+    if not is_running and phase in ('done', 'error'):
         _sync_shared_to_session()
         st.rerun()
 
