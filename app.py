@@ -600,8 +600,7 @@ def _sync_shared_to_session():
 
 @st.fragment(run_every=2)
 def _render_scraping_progress():
-    """스크래핑 실시간 진행 상태를 표시하는 fragment (2초마다 자동 갱신)"""
-    # shared dict에서 직접 읽기 (스레드가 쓰는 데이터)
+    """스크래핑 실시간 진행 + 완료 후 결과를 모두 표시하는 fragment"""
     shared = st.session_state.get('_scraping_shared', {})
     progress = shared.get('scraping_progress', {})
     phase = progress.get('phase', '')
@@ -615,7 +614,7 @@ def _render_scraping_progress():
     elapsed = time.time() - start_time if start_time else 0
     pct = current_idx / total
 
-    # 완료/오류 시: session_state 동기화 + fragment 내부에서 완료 UI
+    # 완료/오류 시: session_state 동기화 + 전체 결과 UI 렌더링
     is_running = shared.get('scraping_running', False)
     if not is_running and phase in ('done', 'error'):
         # 동기화 (1회만 수행)
@@ -624,34 +623,48 @@ def _render_scraping_progress():
 
         if phase == 'done':
             st.success("✅ 스크래핑 완료!")
-            if partial_results:
-                success = sum(1 for r in partial_results if r.get('success'))
-                fail = len(partial_results) - success
-                st.caption(f"성공 {success}개 / 실패 {fail}개 / 전체 {total}개 — ⏱️ {format_elapsed_time(elapsed)}")
 
-            # fragment 내에서 바로 ZIP 다운로드 버튼 제공
+            results = shared.get('results', [])
+            if results:
+                success_count = sum(1 for r in results if r.get('success'))
+                fail_count = len(results) - success_count
+
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("📁 전체", f"{len(results)}개")
+                with col2:
+                    st.metric("✅ 성공", f"{success_count}개")
+                with col3:
+                    st.metric("❌ 실패", f"{fail_count}개")
+                with col4:
+                    st.metric("⏱️ 총 소요시간", format_elapsed_time(elapsed))
+
+                st.write("")
+
+                bank_dates = shared.get('bank_dates', {})
+                df = create_summary_dataframe(results, bank_dates)
+                st.dataframe(df, width="stretch", hide_index=True)
+
+            # ZIP 다운로드
             zip_path = shared.get('zip_path')
             if zip_path and os.path.exists(zip_path) and os.path.getsize(zip_path) > 0:
                 if '_scraping_zip_bytes' not in st.session_state:
                     with open(zip_path, 'rb') as f:
                         st.session_state._scraping_zip_bytes = f.read()
-                st.download_button(
-                    label="📥 ZIP 다운로드",
-                    data=st.session_state._scraping_zip_bytes,
-                    file_name=f"저축은행_데이터_{datetime.now().strftime('%Y%m%d')}.zip",
-                    mime="application/zip",
-                    type="primary",
-                    key="btn_scraping_zip_frag"
-                )
-
-            if st.button("📊 전체 결과 보기", key="btn_scraping_show_results"):
-                if '_scraping_zip_bytes' in st.session_state:
-                    del st.session_state._scraping_zip_bytes
-                st.rerun()
+                st.write("")
+                st.markdown("#### 📦 전체 데이터 압축 파일")
+                col1, col2, col3 = st.columns([1, 2, 1])
+                with col2:
+                    st.download_button(
+                        label="📥 내 PC로 다운로드 (ZIP)",
+                        data=st.session_state._scraping_zip_bytes,
+                        file_name=f"저축은행_데이터_{datetime.now().strftime('%Y%m%d')}.zip",
+                        mime="application/zip",
+                        type="primary",
+                        key="btn_scraping_zip_frag"
+                    )
         else:
             st.error("❌ 스크래핑 중 오류가 발생했습니다.")
-            if st.button("🔄 새로고침", key="btn_scraping_error_refresh"):
-                st.rerun()
         return
 
     # 단계 텍스트
@@ -687,7 +700,7 @@ def _render_scraping_progress():
 
 @st.fragment(run_every=2)
 def _render_disclosure_progress():
-    """공시파일 다운로드 실시간 진행 상태를 표시하는 fragment (2초마다 자동 갱신)"""
+    """공시파일 다운로드 실시간 진행 + 완료 후 결과를 모두 표시하는 fragment"""
     shared = st.session_state.get('_disclosure_shared', {})
     progress = shared.get('progress', {})
     phase = progress.get('phase', '')
@@ -700,7 +713,7 @@ def _render_disclosure_progress():
     elapsed = time.time() - start_time if start_time else 0
     pct = min(current_idx / total, 1.0) if total > 0 else 0
 
-    # 완료/오류 시: session_state 동기화 + fragment 내부에서 결과 UI 렌더링
+    # 완료/오류 시: session_state 동기화 + 전체 결과 UI 렌더링
     is_running = shared.get('running', False)
     if not is_running and phase in ('done', 'error'):
         # 동기화 (1회만 수행)
@@ -713,41 +726,61 @@ def _render_disclosure_progress():
         if phase == 'done':
             st.success("✅ 공시파일 다운로드 완료!")
 
-            # fragment 내에서 바로 ZIP 다운로드 버튼 제공
-            zip_path = st.session_state.disclosure_zip_path
-            if zip_path and os.path.exists(zip_path) and os.path.getsize(zip_path) > 0:
-                # 바이트를 세션에 캐시하여 매 2초마다 파일 재읽기 방지
-                if '_disclosure_zip_bytes' not in st.session_state:
-                    with open(zip_path, 'rb') as f:
-                        st.session_state._disclosure_zip_bytes = f.read()
-                st.download_button(
-                    label="📥 공시파일 ZIP 다운로드",
-                    data=st.session_state._disclosure_zip_bytes,
-                    file_name=f"저축은행_공시파일_{datetime.now().strftime('%Y%m%d')}.zip",
-                    mime="application/zip",
-                    type="primary",
-                    key="btn_disclosure_zip_frag"
-                )
-                zip_size_mb = len(st.session_state._disclosure_zip_bytes) / (1024 * 1024)
-                st.caption(f"파일 크기: {zip_size_mb:.1f} MB")
-
-            # 결과 요약
             dl_results = shared.get('results', [])
             if dl_results:
                 success = len([r for r in dl_results if r['상태'] == '완료'])
                 partial = len([r for r in dl_results if r['상태'] == '부분완료'])
                 failed = len([r for r in dl_results if r['상태'] == '실패'])
-                st.caption(f"완료 {success}개 / 부분완료 {partial}개 / 실패 {failed}개")
 
-            # 전체 결과를 보려면 새로고침 (사용자가 직접 클릭)
-            if st.button("📊 전체 결과 보기", key="btn_disclosure_show_results"):
-                if '_disclosure_zip_bytes' in st.session_state:
-                    del st.session_state._disclosure_zip_bytes
-                st.rerun()
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("전체", f"{len(dl_results)}개")
+                with col2:
+                    st.metric("완료", f"{success}개")
+                with col3:
+                    st.metric("부분완료", f"{partial}개")
+                with col4:
+                    st.metric("실패", f"{failed}개")
+
+                st.dataframe(
+                    pd.DataFrame(dl_results),
+                    width="stretch",
+                    hide_index=True
+                )
+
+            # ZIP 다운로드
+            zip_path = shared.get('zip_path')
+            if zip_path and os.path.exists(zip_path) and os.path.getsize(zip_path) > 0:
+                if '_disclosure_zip_bytes' not in st.session_state:
+                    with open(zip_path, 'rb') as f:
+                        st.session_state._disclosure_zip_bytes = f.read()
+                st.write("")
+                col1, col2, col3 = st.columns([1, 2, 1])
+                with col2:
+                    st.download_button(
+                        label="📥 공시파일 ZIP 다운로드",
+                        data=st.session_state._disclosure_zip_bytes,
+                        file_name=f"저축은행_공시파일_{datetime.now().strftime('%Y%m%d')}.zip",
+                        mime="application/zip",
+                        type="primary",
+                        key="btn_disclosure_zip_frag"
+                    )
+                    zip_size_mb = len(st.session_state._disclosure_zip_bytes) / (1024 * 1024)
+                    st.caption(f"파일 크기: {zip_size_mb:.1f} MB")
+
+            # 로그
+            dl_logs = shared.get('logs', [])
+            if dl_logs:
+                with st.expander("📝 다운로드 로그", expanded=False):
+                    st.text_area(
+                        "로그",
+                        value="\n".join(dl_logs[-100:]),
+                        height=200,
+                        disabled=True,
+                        key="disclosure_log_area_frag"
+                    )
         else:
             st.error(f"❌ 오류 발생: {progress.get('error_msg', '')}")
-            if st.button("🔄 새로고침", key="btn_disclosure_error_refresh"):
-                st.rerun()
         return
 
     if phase == 'init':
