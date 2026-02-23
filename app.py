@@ -807,6 +807,8 @@ def init_session_state():
         st.session_state._disclosure_shared = {}
     if '_disclosure_thread' not in st.session_state:
         st.session_state._disclosure_thread = None
+    if '_disclosure_auto_downloaded' not in st.session_state:
+        st.session_state._disclosure_auto_downloaded = False
     if 'scraping_save_path' not in st.session_state:
         st.session_state.scraping_save_path = ""
     if 'disclosure_save_path' not in st.session_state:
@@ -977,13 +979,14 @@ def main():
                     )
             if 'zip_path' in st.session_state and st.session_state.zip_path and os.path.exists(st.session_state.zip_path):
                 with open(st.session_state.zip_path, 'rb') as f:
-                    st.download_button(
-                        label="📥 전체 데이터 ZIP 다운로드",
-                        data=f,
-                        file_name=f"저축은행_데이터_{datetime.now().strftime('%Y%m%d')}.zip",
-                        mime="application/zip",
-                        width="stretch"
-                    )
+                    zip_bytes = f.read()
+                st.download_button(
+                    label="📥 전체 데이터 ZIP 다운로드",
+                    data=zip_bytes,
+                    file_name=f"저축은행_데이터_{datetime.now().strftime('%Y%m%d')}.zip",
+                    mime="application/zip",
+                    width="stretch"
+                )
         else:
             st.info("📋 아직 보고서가 없습니다. 스크래핑을 실행하면 여기에 결과가 표시됩니다.")
         return
@@ -1465,20 +1468,21 @@ def main():
             st.write("")
 
             # ZIP 파일 다운로드
-            if 'zip_path' in st.session_state and st.session_state.zip_path:
+            if 'zip_path' in st.session_state and st.session_state.zip_path and os.path.exists(st.session_state.zip_path):
                 st.markdown("#### 📦 전체 데이터 압축 파일")
                 st.caption("아래 버튼을 클릭하면 브라우저 다운로드를 통해 로컬 PC에 저장됩니다.")
                 col1, col2, col3 = st.columns([1, 2, 1])
                 with col2:
                     with open(st.session_state.zip_path, 'rb') as f:
-                        st.download_button(
-                            label="📥 내 PC로 다운로드 (ZIP)",
-                            data=f,
-                            file_name=f"{download_filename}.zip",
-                            mime="application/zip",
-                            width="stretch",
-                            type="primary"
-                        )
+                        zip_bytes = f.read()
+                    st.download_button(
+                        label="📥 내 PC로 다운로드 (ZIP)",
+                        data=zip_bytes,
+                        file_name=f"{download_filename}.zip",
+                        mime="application/zip",
+                        width="stretch",
+                        type="primary"
+                    )
         else:
             st.info("아직 스크래핑 결과가 없습니다. 은행을 선택하고 스크래핑을 실행하세요.")
 
@@ -1517,6 +1521,19 @@ def main():
 
             # 다운로드 결과 표시
             if st.session_state.disclosure_results:
+                # 자동 다운로드: 공시파일 다운로드 완료 후 최초 1회
+                if (not st.session_state._disclosure_auto_downloaded
+                        and not st.session_state.disclosure_running
+                        and st.session_state.disclosure_zip_path
+                        and os.path.exists(st.session_state.disclosure_zip_path)
+                        and os.path.getsize(st.session_state.disclosure_zip_path) > 0):
+                    st.session_state._disclosure_auto_downloaded = True
+                    _auto_download_file(
+                        st.session_state.disclosure_zip_path,
+                        f"저축은행_공시파일_{datetime.now().strftime('%Y%m%d')}.zip"
+                    )
+                    st.toast("공시파일 ZIP이 자동으로 다운로드됩니다.", icon="📥")
+
                 st.divider()
                 st.markdown("#### 📊 다운로드 결과")
 
@@ -1543,18 +1560,24 @@ def main():
 
                 # ZIP 다운로드 버튼
                 if st.session_state.disclosure_zip_path and os.path.exists(st.session_state.disclosure_zip_path):
-                    col1, col2, col3 = st.columns([1, 2, 1])
-                    with col2:
-                        with open(st.session_state.disclosure_zip_path, 'rb') as f:
+                    zip_size = os.path.getsize(st.session_state.disclosure_zip_path)
+                    if zip_size > 0:
+                        col1, col2, col3 = st.columns([1, 2, 1])
+                        with col2:
+                            with open(st.session_state.disclosure_zip_path, 'rb') as f:
+                                zip_bytes = f.read()
                             st.download_button(
                                 label="📥 공시파일 ZIP 다운로드",
-                                data=f,
+                                data=zip_bytes,
                                 file_name=f"저축은행_공시파일_{datetime.now().strftime('%Y%m%d')}.zip",
                                 mime="application/zip",
                                 width="stretch",
                                 type="primary",
                                 key="btn_disclosure_zip"
                             )
+                            st.caption(f"파일 크기: {zip_size / (1024*1024):.1f} MB")
+                    else:
+                        st.warning("ZIP 파일이 비어있습니다. 다운로드된 파일이 없을 수 있습니다.")
 
             # 다운로드 로그
             if st.session_state.disclosure_logs:
@@ -1818,6 +1841,7 @@ def _start_disclosure_download(save_path=None):
     st.session_state.disclosure_results = []
     st.session_state.disclosure_logs = []
     st.session_state.disclosure_zip_path = None
+    st.session_state._disclosure_auto_downloaded = False
 
     thread = threading.Thread(
         target=_disclosure_worker,
@@ -1895,11 +1919,20 @@ def _disclosure_worker(shared, save_path=None):
                 download_path,
                 f"저축은행_공시파일_{datetime.now().strftime('%Y%m%d')}.zip"
             )
+            files_added = 0
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
                 for fpath in downloaded_files:
                     if os.path.isfile(fpath) and not fpath.endswith('.zip'):
                         zipf.write(fpath, os.path.basename(fpath))
-            shared['zip_path'] = zip_path
+                        files_added += 1
+            if files_added > 0 and os.path.getsize(zip_path) > 0:
+                shared['zip_path'] = zip_path
+                zip_size_mb = os.path.getsize(zip_path) / (1024 * 1024)
+                log_callback(f"ZIP 압축 완료: {files_added}개 파일, {zip_size_mb:.1f} MB")
+            else:
+                log_callback("ZIP 파일에 추가된 파일이 없습니다.")
+        else:
+            log_callback("압축할 다운로드 파일이 없습니다.")
 
         # 결과 저장
         shared['results'] = list(downloader.results) if hasattr(downloader, 'results') else []
