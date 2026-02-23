@@ -615,6 +615,45 @@ def _render_scraping_progress():
     elapsed = time.time() - start_time if start_time else 0
     pct = current_idx / total
 
+    # 완료/오류 시: session_state 동기화 + fragment 내부에서 완료 UI
+    is_running = shared.get('scraping_running', False)
+    if not is_running and phase in ('done', 'error'):
+        # 동기화 (1회만 수행)
+        if st.session_state.scraping_running:
+            _sync_shared_to_session()
+
+        if phase == 'done':
+            st.success("✅ 스크래핑 완료!")
+            if partial_results:
+                success = sum(1 for r in partial_results if r.get('success'))
+                fail = len(partial_results) - success
+                st.caption(f"성공 {success}개 / 실패 {fail}개 / 전체 {total}개 — ⏱️ {format_elapsed_time(elapsed)}")
+
+            # fragment 내에서 바로 ZIP 다운로드 버튼 제공
+            zip_path = shared.get('zip_path')
+            if zip_path and os.path.exists(zip_path) and os.path.getsize(zip_path) > 0:
+                if '_scraping_zip_bytes' not in st.session_state:
+                    with open(zip_path, 'rb') as f:
+                        st.session_state._scraping_zip_bytes = f.read()
+                st.download_button(
+                    label="📥 ZIP 다운로드",
+                    data=st.session_state._scraping_zip_bytes,
+                    file_name=f"저축은행_데이터_{datetime.now().strftime('%Y%m%d')}.zip",
+                    mime="application/zip",
+                    type="primary",
+                    key="btn_scraping_zip_frag"
+                )
+
+            if st.button("📊 전체 결과 보기", key="btn_scraping_show_results"):
+                if '_scraping_zip_bytes' in st.session_state:
+                    del st.session_state._scraping_zip_bytes
+                st.rerun()
+        else:
+            st.error("❌ 스크래핑 중 오류가 발생했습니다.")
+            if st.button("🔄 새로고침", key="btn_scraping_error_refresh"):
+                st.rerun()
+        return
+
     # 단계 텍스트
     if phase == 'scraping':
         phase_text = f"처리 중: **{current_bank}** ({current_idx}/{total})"
@@ -623,12 +662,6 @@ def _render_scraping_progress():
         pct = 1.0
     elif phase == 'ai_excel':
         phase_text = "🤖 GPT-5.2가 분기총괄 엑셀 생성 중..."
-        pct = 1.0
-    elif phase == 'done':
-        phase_text = "✅ 완료!"
-        pct = 1.0
-    elif phase == 'error':
-        phase_text = "❌ 오류 발생"
         pct = 1.0
     else:
         phase_text = "준비 중..."
@@ -651,12 +684,6 @@ def _render_scraping_progress():
         fail = len(partial_results) - success
         st.caption(f"현재까지: 성공 {success}개 / 실패 {fail}개 / 전체 {total}개")
 
-    # 완료 시 shared → session_state 동기화 후 페이지 전체 리로드
-    is_running = shared.get('scraping_running', False)
-    if not is_running and phase in ('done', 'error'):
-        _sync_shared_to_session()
-        st.rerun()
-
 
 @st.fragment(run_every=2)
 def _render_disclosure_progress():
@@ -673,6 +700,56 @@ def _render_disclosure_progress():
     elapsed = time.time() - start_time if start_time else 0
     pct = min(current_idx / total, 1.0) if total > 0 else 0
 
+    # 완료/오류 시: session_state 동기화 + fragment 내부에서 결과 UI 렌더링
+    is_running = shared.get('running', False)
+    if not is_running and phase in ('done', 'error'):
+        # 동기화 (1회만 수행)
+        if st.session_state.disclosure_running:
+            st.session_state.disclosure_running = False
+            st.session_state.disclosure_results = shared.get('results', [])
+            st.session_state.disclosure_logs = shared.get('logs', [])
+            st.session_state.disclosure_zip_path = shared.get('zip_path')
+
+        if phase == 'done':
+            st.success("✅ 공시파일 다운로드 완료!")
+
+            # fragment 내에서 바로 ZIP 다운로드 버튼 제공
+            zip_path = st.session_state.disclosure_zip_path
+            if zip_path and os.path.exists(zip_path) and os.path.getsize(zip_path) > 0:
+                # 바이트를 세션에 캐시하여 매 2초마다 파일 재읽기 방지
+                if '_disclosure_zip_bytes' not in st.session_state:
+                    with open(zip_path, 'rb') as f:
+                        st.session_state._disclosure_zip_bytes = f.read()
+                st.download_button(
+                    label="📥 공시파일 ZIP 다운로드",
+                    data=st.session_state._disclosure_zip_bytes,
+                    file_name=f"저축은행_공시파일_{datetime.now().strftime('%Y%m%d')}.zip",
+                    mime="application/zip",
+                    type="primary",
+                    key="btn_disclosure_zip_frag"
+                )
+                zip_size_mb = len(st.session_state._disclosure_zip_bytes) / (1024 * 1024)
+                st.caption(f"파일 크기: {zip_size_mb:.1f} MB")
+
+            # 결과 요약
+            dl_results = shared.get('results', [])
+            if dl_results:
+                success = len([r for r in dl_results if r['상태'] == '완료'])
+                partial = len([r for r in dl_results if r['상태'] == '부분완료'])
+                failed = len([r for r in dl_results if r['상태'] == '실패'])
+                st.caption(f"완료 {success}개 / 부분완료 {partial}개 / 실패 {failed}개")
+
+            # 전체 결과를 보려면 새로고침 (사용자가 직접 클릭)
+            if st.button("📊 전체 결과 보기", key="btn_disclosure_show_results"):
+                if '_disclosure_zip_bytes' in st.session_state:
+                    del st.session_state._disclosure_zip_bytes
+                st.rerun()
+        else:
+            st.error(f"❌ 오류 발생: {progress.get('error_msg', '')}")
+            if st.button("🔄 새로고침", key="btn_disclosure_error_refresh"):
+                st.rerun()
+        return
+
     if phase == 'init':
         phase_text = "📥 공시파일 다운로드 초기화 중..."
     elif phase == 'extracting':
@@ -681,12 +758,6 @@ def _render_disclosure_progress():
         phase_text = f"📥 다운로드 중: **{current_bank}** ({current_idx}/{total})"
     elif phase == 'zipping':
         phase_text = "📦 파일 압축 중..."
-        pct = 1.0
-    elif phase == 'done':
-        phase_text = "✅ 완료!"
-        pct = 1.0
-    elif phase == 'error':
-        phase_text = f"❌ 오류 발생: {progress.get('error_msg', '')}"
         pct = 1.0
     else:
         phase_text = "준비 중..."
@@ -709,15 +780,6 @@ def _render_disclosure_progress():
         success = sum(1 for r in partial_results if r.get('상태') in ['완료', '부분완료'])
         fail = sum(1 for r in partial_results if r.get('상태') == '실패')
         st.caption(f"현재까지: 성공 {success}개 / 실패 {fail}개 / 전체 {total}개")
-
-    # 완료 시 session_state 동기화 후 리로드
-    is_running = shared.get('running', False)
-    if not is_running and phase in ('done', 'error'):
-        st.session_state.disclosure_running = False
-        st.session_state.disclosure_results = shared.get('results', [])
-        st.session_state.disclosure_logs = shared.get('logs', [])
-        st.session_state.disclosure_zip_path = shared.get('zip_path')
-        st.rerun()
 
 
 @st.fragment(run_every=3)
@@ -746,8 +808,8 @@ def _render_global_task_banner():
             msg = f"🔄 스크래핑 진행 중... — ⏱️ {format_elapsed_time(elapsed)}"
         st.info(msg)
     elif st.session_state.scraping_running:
+        # shared는 완료되었으나 session_state 미동기화 — 동기화만 수행 (rerun 없음)
         _sync_shared_to_session()
-        st.rerun()
 
     # --- 다운로드 배너 ---
     disclosure_shared = st.session_state.get('_disclosure_shared', {})
@@ -1786,6 +1848,7 @@ def start_scraping(selected_banks, scrape_type, auto_zip, download_filename, use
     st.session_state.summary_excel_path = None
     st.session_state.validation_result = None
     st.session_state.elapsed_time = 0
+    st.session_state.pop('_scraping_zip_bytes', None)
 
     # 스레드와 공유할 plain dict 생성
     shared = {
@@ -1842,6 +1905,7 @@ def _start_disclosure_download(save_path=None):
     st.session_state.disclosure_logs = []
     st.session_state.disclosure_zip_path = None
     st.session_state._disclosure_auto_downloaded = False
+    st.session_state.pop('_disclosure_zip_bytes', None)
 
     thread = threading.Thread(
         target=_disclosure_worker,
