@@ -43,11 +43,13 @@ except ImportError:
 # 설정 상수
 # ============================================================
 TARGET_URL = "https://www.fsb.or.kr/busmagepbnf_0100.act"
-MAX_RETRY_ATTEMPTS = 3
+MAX_RETRY_ATTEMPTS = 5
 DOWNLOAD_TIMEOUT = 45
 REFRESH_INTERVAL = 15
 TABLE_SELECTOR = "table tbody tr"
 MEMORY_THRESHOLD = 80
+PAGE_LOAD_TIMEOUT = 30
+INITIAL_BACKOFF = 2
 
 
 # ============================================================
@@ -163,8 +165,6 @@ class DisclosureDownloader:
         chrome_options.add_argument('--disable-background-networking')
         chrome_options.add_argument('--disable-sync')
         chrome_options.add_argument('--disable-translate')
-        chrome_options.add_argument('--disable-application-cache')
-        chrome_options.add_argument('--disk-cache-size=0')
 
         chrome_options.add_argument(
             '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -186,7 +186,7 @@ class DisclosureDownloader:
             "profile.content_settings.exceptions.automatic_downloads.*.setting": 1
         }
         chrome_options.add_experimental_option("prefs", prefs)
-        chrome_options.page_load_strategy = 'normal'
+        chrome_options.page_load_strategy = 'eager'
 
         # Streamlit Cloud 환경 지원
         chromium_paths = [
@@ -230,7 +230,7 @@ class DisclosureDownloader:
         else:
             driver = webdriver.Chrome(options=chrome_options)
 
-        driver.set_page_load_timeout(60)
+        driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
         driver.implicitly_wait(10)
 
         # Chrome DevTools Protocol 다운로드 설정
@@ -255,7 +255,7 @@ class DisclosureDownloader:
             return False
 
     def _recover_driver(self):
-        """드라이버 세션 복구"""
+        """드라이버 세션 복구 (지수 백오프 재시도)"""
         self.log("드라이버 세션 복구 중...", 1)
         if self.driver:
             try:
@@ -263,12 +263,28 @@ class DisclosureDownloader:
             except Exception:
                 pass
 
-        self.driver = self.create_driver()
-        self.driver.get(TARGET_URL)
-        WebDriverWait(self.driver, 30).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, TABLE_SELECTOR))
-        )
-        time.sleep(1)
+        backoff = INITIAL_BACKOFF
+        for attempt in range(3):
+            try:
+                self.driver = self.create_driver()
+                self.driver.get(TARGET_URL)
+                WebDriverWait(self.driver, PAGE_LOAD_TIMEOUT).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, TABLE_SELECTOR))
+                )
+                time.sleep(1)
+                self.log("드라이버 복구 성공", 1)
+                return
+            except Exception as e:
+                self.log(f"복구 실패 (시도 {attempt + 1}/3): {str(e)[:50]}", 1)
+                if attempt < 2:
+                    time.sleep(backoff)
+                    backoff = min(backoff * 2, 16)
+                    if self.driver:
+                        try:
+                            self.driver.quit()
+                        except Exception:
+                            pass
+        self.log("드라이버 복구 최종 실패", 1)
 
     # ----------------------------------------------------------
     # 페이지 및 데이터 추출
@@ -537,16 +553,17 @@ class DisclosureDownloader:
     # ----------------------------------------------------------
     def start_and_extract_banks(self) -> List[Dict[str, Any]]:
         """
-        브라우저 시작, 페이지 접속, 은행 목록 추출
+        브라우저 시작, 페이지 접속, 은행 목록 추출 (지수 백오프 재시도)
 
         Returns:
             은행 데이터 리스트
         """
         self.driver = self.create_driver()
+        backoff = INITIAL_BACKOFF
 
         for attempt in range(MAX_RETRY_ATTEMPTS):
             try:
-                self.log("웹사이트 접속 중...")
+                self.log(f"웹사이트 접속 중... (시도 {attempt + 1}/{MAX_RETRY_ATTEMPTS})")
                 self.driver.get(TARGET_URL)
                 time.sleep(2)
 
@@ -558,16 +575,45 @@ class DisclosureDownloader:
                 if bank_list:
                     return bank_list
 
-                self.log(f"은행 목록 비어있음, 재시도... ({attempt + 1})")
+                self.log(f"은행 목록 비어있음, {backoff}초 후 재시도...")
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 16)
                 self.driver.refresh()
-                time.sleep(3)
+                time.sleep(2)
 
             except TimeoutException:
-                self.log(f"타임아웃 (시도 {attempt + 1}/{MAX_RETRY_ATTEMPTS})")
+                self.log(f"페이지 로드 타임아웃 (시도 {attempt + 1}/{MAX_RETRY_ATTEMPTS})")
                 if attempt < MAX_RETRY_ATTEMPTS - 1:
-                    self.driver.refresh()
-                    time.sleep(3)
+                    self.log(f"{backoff}초 후 재시도...")
+                    time.sleep(backoff)
+                    backoff = min(backoff * 2, 16)
+                    try:
+                        self.driver.refresh()
+                        time.sleep(2)
+                    except Exception:
+                        # refresh 실패 시 새로 접속
+                        self.log("새로고침 실패, 페이지 재접속 시도", 1)
+                        try:
+                            self.driver.get(TARGET_URL)
+                        except Exception:
+                            pass
 
+            except (WebDriverException, Exception) as e:
+                self.log(f"접속 오류: {str(e)[:80]} (시도 {attempt + 1}/{MAX_RETRY_ATTEMPTS})")
+                if attempt < MAX_RETRY_ATTEMPTS - 1:
+                    self.log(f"{backoff}초 후 재시도...")
+                    time.sleep(backoff)
+                    backoff = min(backoff * 2, 16)
+                    # 드라이버 세션이 끊어졌을 수 있으므로 재생성 시도
+                    if not self.verify_driver_alive():
+                        self.log("드라이버 세션 끊어짐, 재생성 중...", 1)
+                        try:
+                            self.driver.quit()
+                        except Exception:
+                            pass
+                        self.driver = self.create_driver()
+
+        self.log("모든 재시도 실패 — 웹사이트 접속 불가")
         return []
 
     def download_all(
@@ -657,10 +703,10 @@ class DisclosureDownloader:
         return total_downloaded
 
     def _refresh_and_reextract(self, bank_list: List[Dict], current_index: int):
-        """페이지 새로고침 후 은행 데이터 재매핑"""
+        """페이지 새로고침 후 은행 데이터 재매핑 (실패 시 전체 재접속)"""
         try:
             self.driver.execute_script("window.location.reload();")
-            WebDriverWait(self.driver, 20).until(
+            WebDriverWait(self.driver, PAGE_LOAD_TIMEOUT).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, TABLE_SELECTOR))
             )
             time.sleep(1)
@@ -670,6 +716,21 @@ class DisclosureDownloader:
             for bank in bank_list[current_index:]:
                 if bank['name'] in name_to_data:
                     bank.update(name_to_data[bank['name']])
+        except TimeoutException:
+            self.log("새로고침 타임아웃, 전체 재접속 시도...", 1)
+            try:
+                self.driver.get(TARGET_URL)
+                WebDriverWait(self.driver, PAGE_LOAD_TIMEOUT).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, TABLE_SELECTOR))
+                )
+                time.sleep(1)
+                extracted = self.extract_bank_list()
+                name_to_data = {b['name']: b for b in extracted}
+                for bank in bank_list[current_index:]:
+                    if bank['name'] in name_to_data:
+                        bank.update(name_to_data[bank['name']])
+            except Exception as e2:
+                self.log(f"전체 재접속도 실패: {str(e2)[:50]}, 계속 진행", 1)
         except Exception:
             self.log("페이지 새로고침 후 재매핑 실패, 계속 진행", 1)
 
