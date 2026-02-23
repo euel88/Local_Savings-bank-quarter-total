@@ -658,6 +658,68 @@ def _render_scraping_progress():
         st.rerun()
 
 
+@st.fragment(run_every=2)
+def _render_disclosure_progress():
+    """공시파일 다운로드 실시간 진행 상태를 표시하는 fragment (2초마다 자동 갱신)"""
+    shared = st.session_state.get('_disclosure_shared', {})
+    progress = shared.get('progress', {})
+    phase = progress.get('phase', '')
+    current_idx = progress.get('current_idx', 0)
+    total = progress.get('total_banks', 1) or 1
+    current_bank = progress.get('current_bank', '')
+    start_time = progress.get('start_time', 0)
+    logs = shared.get('logs', [])
+
+    elapsed = time.time() - start_time if start_time else 0
+    pct = min(current_idx / total, 1.0) if total > 0 else 0
+
+    if phase == 'init':
+        phase_text = "📥 공시파일 다운로드 초기화 중..."
+    elif phase == 'extracting':
+        phase_text = "🌐 웹사이트 접속 및 은행 목록 추출 중..."
+    elif phase == 'downloading':
+        phase_text = f"📥 다운로드 중: **{current_bank}** ({current_idx}/{total})"
+    elif phase == 'zipping':
+        phase_text = "📦 파일 압축 중..."
+        pct = 1.0
+    elif phase == 'done':
+        phase_text = "✅ 완료!"
+        pct = 1.0
+    elif phase == 'error':
+        phase_text = f"❌ 오류 발생: {progress.get('error_msg', '')}"
+        pct = 1.0
+    else:
+        phase_text = "준비 중..."
+
+    st.progress(pct)
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.markdown(phase_text)
+    with col2:
+        st.markdown(f"⏱️ **{format_elapsed_time(elapsed)}**")
+
+    # 실시간 로그 (최근 8줄)
+    if logs:
+        recent_logs = logs[-8:]
+        st.text_area("실시간 로그", value="\n".join(recent_logs), height=150, disabled=True, key="dl_log_area")
+
+    # 실시간 부분 결과 요약
+    partial_results = shared.get('results', [])
+    if partial_results:
+        success = sum(1 for r in partial_results if r.get('상태') in ['완료', '부분완료'])
+        fail = sum(1 for r in partial_results if r.get('상태') == '실패')
+        st.caption(f"현재까지: 성공 {success}개 / 실패 {fail}개 / 전체 {total}개")
+
+    # 완료 시 session_state 동기화 후 리로드
+    is_running = shared.get('running', False)
+    if not is_running and phase in ('done', 'error'):
+        st.session_state.disclosure_running = False
+        st.session_state.disclosure_results = shared.get('results', [])
+        st.session_state.disclosure_logs = shared.get('logs', [])
+        st.session_state.disclosure_zip_path = shared.get('zip_path')
+        st.rerun()
+
+
 @st.fragment(run_every=3)
 def _render_global_scraping_banner():
     """페이지와 관계없이 표시되는 스크래핑 진행 배너"""
@@ -720,6 +782,10 @@ def init_session_state():
         st.session_state.disclosure_logs = []
     if 'disclosure_zip_path' not in st.session_state:
         st.session_state.disclosure_zip_path = None
+    if '_disclosure_shared' not in st.session_state:
+        st.session_state._disclosure_shared = {}
+    if '_disclosure_thread' not in st.session_state:
+        st.session_state._disclosure_thread = None
     if 'scraping_save_path' not in st.session_state:
         st.session_state.scraping_save_path = ""
     if 'disclosure_save_path' not in st.session_state:
@@ -977,59 +1043,90 @@ def main():
 
     # Calculate live stats (진행 중이면 shared dict의 partial_results 참조)
     shared = st.session_state.get('_scraping_shared', {})
-    active_crawlers = len(st.session_state.selected_banks) if st.session_state.scraping_running else 0
-    total_crawlers = 79
-    live_results = shared.get('scraping_progress', {}).get('partial_results', []) if st.session_state.scraping_running else st.session_state.results
+    is_scraping = st.session_state.scraping_running
+    is_disclosure = st.session_state.get('disclosure_running', False)
+    selected_count = len(st.session_state.selected_banks)
+    live_results = shared.get('scraping_progress', {}).get('partial_results', []) if is_scraping else st.session_state.results
     data_collected = sum(1 for r in live_results if r.get('success', False)) if live_results else 0
     total_records = len(live_results) if live_results else 0
-    health_pct = "99.9%"
 
     with stat_col1:
+        if is_scraping:
+            crawl_badge = f'<span class="stat-card-badge badge-green">진행 중</span>'
+            crawl_value = f"{shared.get('scraping_progress', {}).get('current_idx', 0)} <span>/ {selected_count}</span>"
+        elif is_disclosure:
+            dl_progress = st.session_state.get('_disclosure_shared', {}).get('progress', {})
+            dl_current = dl_progress.get('current_idx', 0)
+            dl_total = dl_progress.get('total_banks', 0)
+            crawl_badge = f'<span class="stat-card-badge badge-green">다운로드 중</span>'
+            crawl_value = f"{dl_current} <span>/ {dl_total}</span>" if dl_total > 0 else "준비 중"
+        else:
+            crawl_badge = f'<span class="stat-card-badge badge-amber">대기</span>'
+            crawl_value = f"{selected_count} <span>선택됨</span>"
         st.markdown(f"""
         <div class="stat-card">
             <div style="display:flex; justify-content:space-between; align-items:flex-start; position:relative; z-index:1;">
                 <div class="stat-card-icon">
-                    <span class="material-symbols-outlined">bug_report</span>
+                    <span class="material-symbols-outlined">monitoring</span>
                 </div>
-                <span class="stat-card-badge badge-green">+{active_crawlers} active</span>
+                {crawl_badge}
             </div>
             <div style="margin-top:1rem; position:relative; z-index:1;">
-                <p class="stat-card-label">Active Crawlers</p>
-                <p class="stat-card-value">{active_crawlers} <span>/ {total_crawlers}</span></p>
+                <p class="stat-card-label">진행 현황</p>
+                <p class="stat-card-value">{crawl_value}</p>
             </div>
         </div>
         """, unsafe_allow_html=True)
 
     with stat_col2:
-        display_data = f"{data_collected:,}" if data_collected > 0 else "12,840"
-        today_count = f"+{total_records}" if total_records > 0 else "+1.5k today"
+        if data_collected > 0 or total_records > 0:
+            display_data = f"{data_collected}"
+            today_count = f"{data_collected}/{total_records} 완료"
+            data_badge_class = "badge-green"
+        else:
+            display_data = "0"
+            today_count = "수집 대기"
+            data_badge_class = "badge-amber"
         st.markdown(f"""
         <div class="stat-card">
             <div style="display:flex; justify-content:space-between; align-items:flex-start; position:relative; z-index:1;">
                 <div class="stat-card-icon">
                     <span class="material-symbols-outlined">database</span>
                 </div>
-                <span class="stat-card-badge badge-green">{today_count}</span>
+                <span class="stat-card-badge {data_badge_class}">{today_count}</span>
             </div>
             <div style="margin-top:1rem; position:relative; z-index:1;">
-                <p class="stat-card-label">Data Collected</p>
-                <p class="stat-card-value">{display_data}</p>
+                <p class="stat-card-label">수집 데이터</p>
+                <p class="stat-card-value">{display_data} <span>건</span></p>
             </div>
         </div>
         """, unsafe_allow_html=True)
 
     with stat_col3:
+        if is_scraping or is_disclosure:
+            health_badge = '<span class="stat-card-badge badge-green">실행 중</span>'
+            health_icon = "play_circle"
+            health_label = "실행 중"
+        elif data_collected > 0 and total_records > 0:
+            success_rate = round(data_collected / total_records * 100, 1)
+            health_badge = f'<span class="stat-card-badge badge-green">완료</span>'
+            health_icon = "check_circle"
+            health_label = f"성공률 {success_rate}%"
+        else:
+            health_badge = '<span class="stat-card-badge badge-amber">대기</span>'
+            health_icon = "hourglass_empty"
+            health_label = "대기 중"
         st.markdown(f"""
         <div class="stat-card">
             <div style="display:flex; justify-content:space-between; align-items:flex-start; position:relative; z-index:1;">
                 <div class="stat-card-icon">
-                    <span class="material-symbols-outlined">health_and_safety</span>
+                    <span class="material-symbols-outlined">{health_icon}</span>
                 </div>
-                <span class="stat-card-badge badge-amber">Stable</span>
+                {health_badge}
             </div>
             <div style="margin-top:1rem; position:relative; z-index:1;">
-                <p class="stat-card-label">System Health</p>
-                <p class="stat-card-value">{health_pct}</p>
+                <p class="stat-card-label">시스템 상태</p>
+                <p class="stat-card-value">{health_label}</p>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -1321,10 +1418,10 @@ def main():
                     disabled=disclosure_disabled,
                     key="btn_disclosure_download"
                 ):
-                    run_disclosure_download(disclosure_save_path)
+                    _start_disclosure_download(disclosure_save_path)
 
             if st.session_state.disclosure_running:
-                st.info("⏳ 공시파일 다운로드가 진행 중입니다...")
+                _render_disclosure_progress()
 
             # 다운로드 결과 표시
             if st.session_state.disclosure_results:
@@ -1608,31 +1705,53 @@ def start_scraping(selected_banks, scrape_type, auto_zip, download_filename, use
     thread.start()
 
 
-def run_disclosure_download(save_path=None):
-    """통일경영공시/감사보고서 파일 다운로드 실행"""
+def _start_disclosure_download(save_path=None):
+    """공시파일 다운로드를 백그라운드 스레드로 시작"""
+    shared = {
+        'running': True,
+        'progress': {
+            'phase': 'init',
+            'current_idx': 0,
+            'total_banks': 0,
+            'current_bank': '',
+            'start_time': time.time(),
+            'error_msg': '',
+        },
+        'logs': [],
+        'results': [],
+        'zip_path': None,
+    }
+    st.session_state._disclosure_shared = shared
     st.session_state.disclosure_running = True
     st.session_state.disclosure_results = []
     st.session_state.disclosure_logs = []
     st.session_state.disclosure_zip_path = None
 
-    if save_path:
-        download_path = os.path.abspath(save_path)
-        os.makedirs(download_path, exist_ok=True)
-    else:
-        download_path = tempfile.mkdtemp(prefix="저축은행_공시파일_")
-    logs = []
+    thread = threading.Thread(
+        target=_disclosure_worker,
+        args=(shared, save_path),
+        daemon=True
+    )
+    st.session_state._disclosure_thread = thread
+    thread.start()
 
-    def log_callback(msg):
-        logs.append(msg)
 
-    progress_container = st.container()
-    with progress_container:
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        log_area = st.empty()
+def _disclosure_worker(shared, save_path=None):
+    """백그라운드 스레드에서 실행되는 공시파일 다운로드 워커"""
+    progress = shared['progress']
 
     try:
-        status_text.markdown("**📥 공시파일 다운로드 초기화 중...**")
+        if save_path:
+            download_path = os.path.abspath(save_path)
+            os.makedirs(download_path, exist_ok=True)
+        else:
+            download_path = tempfile.mkdtemp(prefix="저축은행_공시파일_")
+
+        def log_callback(msg):
+            shared['logs'].append(msg)
+
+        progress['phase'] = 'init'
+        log_callback("공시파일 다운로드 초기화 중...")
 
         downloader = DisclosureDownloader(
             download_path=download_path,
@@ -1641,28 +1760,28 @@ def run_disclosure_download(save_path=None):
         )
 
         # 은행 목록 추출
-        status_text.markdown("**🌐 웹사이트 접속 및 은행 목록 추출 중...**")
+        progress['phase'] = 'extracting'
+        log_callback("웹사이트 접속 및 은행 목록 추출 중...")
         bank_list = downloader.start_and_extract_banks()
 
         if not bank_list:
-            st.error("은행 목록을 추출할 수 없습니다.")
+            progress['phase'] = 'error'
+            progress['error_msg'] = '은행 목록을 추출할 수 없습니다.'
+            log_callback("오류: 은행 목록 추출 실패")
+            shared['running'] = False
             return
 
-        status_text.markdown(f"**📥 {len(bank_list)}개 은행 공시파일 다운로드 중...**")
+        total = len(bank_list)
+        progress['total_banks'] = total
+        progress['phase'] = 'downloading'
+        log_callback(f"{total}개 은행 공시파일 다운로드 시작")
 
         # 다운로드 실행
-        def progress_callback(current, total, bank_name):
-            progress = (current + 1) / total
-            progress_bar.progress(progress)
-            status_text.markdown(f"**📥 처리 중:** {bank_name} ({current + 1}/{total})")
-            st.session_state.disclosure_logs = logs.copy()
-            log_area.text_area(
-                "실시간 로그",
-                value="\n".join(logs[-30:]),
-                height=150,
-                disabled=True,
-                key=f"dl_log_{current}"
-            )
+        def progress_callback(current, total_count, bank_name):
+            progress['current_idx'] = current + 1
+            progress['current_bank'] = bank_name
+            shared['results'] = list(downloader.results) if hasattr(downloader, 'results') else []
+            log_callback(f"[{current + 1}/{total_count}] {bank_name} 처리 중")
 
         total_downloaded = downloader.download_all(bank_list, progress_callback)
 
@@ -1670,6 +1789,9 @@ def run_disclosure_download(save_path=None):
         downloader.create_report()
 
         # 다운로드된 파일 ZIP 압축
+        progress['phase'] = 'zipping'
+        log_callback("파일 압축 중...")
+
         downloaded_files = [
             os.path.join(download_path, f)
             for f in os.listdir(download_path)
@@ -1685,26 +1807,25 @@ def run_disclosure_download(save_path=None):
                 for fpath in downloaded_files:
                     if os.path.isfile(fpath) and not fpath.endswith('.zip'):
                         zipf.write(fpath, os.path.basename(fpath))
-            st.session_state.disclosure_zip_path = zip_path
+            shared['zip_path'] = zip_path
 
         # 결과 저장
-        st.session_state.disclosure_results = downloader.results
-        st.session_state.disclosure_logs = logs
-
-        # 완료
-        progress_bar.progress(1.0)
-        success = len([r for r in downloader.results if r['상태'] in ['완료', '부분완료']])
-        status_text.markdown(f"**✅ 완료!** 성공: {success}/{len(bank_list)}, 총 {total_downloaded}개 파일")
-        st.success(f"🎉 공시파일 다운로드 완료! {total_downloaded}개 파일 다운로드됨")
+        shared['results'] = list(downloader.results) if hasattr(downloader, 'results') else []
+        success = len([r for r in shared['results'] if r.get('상태') in ['완료', '부분완료']])
+        log_callback(f"완료! 성공: {success}/{total}, 총 {total_downloaded}개 파일 다운로드")
 
         downloader.cleanup()
 
+        # 완료 표시
+        progress['phase'] = 'done'
+
     except Exception as e:
-        st.error(f"❌ 공시파일 다운로드 중 오류: {str(e)}")
-        st.session_state.disclosure_logs = logs
+        progress['phase'] = 'error'
+        progress['error_msg'] = str(e)
+        shared['logs'].append(f"오류 발생: {str(e)}")
 
     finally:
-        st.session_state.disclosure_running = False
+        shared['running'] = False
 
 
 if __name__ == "__main__":
