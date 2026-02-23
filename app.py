@@ -1410,7 +1410,7 @@ def main():
 
             col1, col2, col3 = st.columns([1, 2, 1])
             with col2:
-                disclosure_disabled = st.session_state.disclosure_running or st.session_state.scraping_running
+                disclosure_disabled = st.session_state.disclosure_running
                 if st.button(
                     "📥 공시파일 일괄 다운로드 시작",
                     type="primary",
