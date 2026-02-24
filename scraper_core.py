@@ -278,7 +278,12 @@ class BankScraper:
             except Exception:
                 # page_load_timeout 초과해도 DOM은 이미 준비되었을 수 있음
                 pass
-            WaitUtils.wait_for_page_load(driver, self.config.PAGE_LOAD_TIMEOUT)
+
+            # DOM 준비 확인 — 실패 시 페이지 접속 자체가 안 된 것
+            if not WaitUtils.wait_for_page_load(driver, self.config.WAIT_TIMEOUT):
+                self.logger.log_message(f"{bank_name} 선택 실패: 페이지 로드 안 됨")
+                return False
+
             WaitUtils.wait_with_random(0.5, 1)
 
             # 은행명 매핑
