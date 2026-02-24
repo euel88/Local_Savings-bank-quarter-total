@@ -1,7 +1,7 @@
 """
 저축은행 중앙회 통일경영공시 데이터 스크래퍼
-Streamlit 웹 앱 버전 v4.1
-- GPT-5.2 API 업그레이드
+Streamlit 웹 앱 버전 v4.2
+- Gemini 3.1 Pro Preview API 전환
 - API 키 보안 저장 (.streamlit/secrets.toml / 환경변수)
 - 스크래핑 완료 후 AI 표 정리 및 엑셀 반환 옵션 추가
 - 통일경영공시/감사보고서 파일 다운로드 기능 추가
@@ -21,15 +21,15 @@ from datetime import datetime
 # 엑셀 생성 모듈 임포트
 try:
     from excel_generator import (
-        ChatGPTExcelGenerator,
+        GeminiExcelGenerator,
         DirectExcelGenerator,
-        generate_excel_with_chatgpt,
-        OPENAI_AVAILABLE
+        generate_excel_with_gemini,
+        GEMINI_AVAILABLE
     )
     EXCEL_GENERATOR_AVAILABLE = True
 except ImportError:
     EXCEL_GENERATOR_AVAILABLE = False
-    OPENAI_AVAILABLE = False
+    GEMINI_AVAILABLE = False
 
 # 공시파일 다운로드 모듈 임포트
 try:
@@ -54,14 +54,14 @@ def load_api_key():
     """API 키를 secrets.toml 또는 환경변수에서 로드"""
     # 1순위: Streamlit secrets (.streamlit/secrets.toml)
     try:
-        key = st.secrets.get("OPENAI_API_KEY", "")
+        key = st.secrets.get("GEMINI_API_KEY", "")
         if key:
             return key
     except Exception:
         pass
 
-    # 2순위: 환경변수
-    key = os.environ.get("OPENAI_API_KEY", "")
+    # 2순위: 환경변수 (GEMINI_API_KEY 또는 GOOGLE_API_KEY)
+    key = os.environ.get("GEMINI_API_KEY", "") or os.environ.get("GOOGLE_API_KEY", "")
     if key:
         return key
 
@@ -661,7 +661,7 @@ def _render_scraping_progress():
         phase_text = "📦 파일 압축 중..."
         pct = 1.0
     elif phase == 'ai_excel':
-        phase_text = "🤖 GPT-5.2가 분기총괄 엑셀 생성 중..."
+        phase_text = "🤖 Gemini 3.1 Pro가 분기총괄 엑셀 생성 중..."
         pct = 1.0
     else:
         phase_text = "준비 중..."
@@ -776,7 +776,7 @@ def _render_global_task_banner():
         elif phase == 'zipping':
             msg = f"📦 스크래핑 파일 압축 중... — ⏱️ {format_elapsed_time(elapsed)}"
         elif phase == 'ai_excel':
-            msg = f"🤖 GPT-5.2 엑셀 생성 중... — ⏱️ {format_elapsed_time(elapsed)}"
+            msg = f"🤖 Gemini 3.1 Pro 엑셀 생성 중... — ⏱️ {format_elapsed_time(elapsed)}"
         else:
             msg = f"🔄 스크래핑 진행 중... — ⏱️ {format_elapsed_time(elapsed)}"
         st.info(msg)
@@ -827,8 +827,8 @@ def init_session_state():
         st.session_state.elapsed_time = 0
     if 'bank_dates' not in st.session_state:
         st.session_state.bank_dates = {}
-    if 'openai_api_key' not in st.session_state:
-        st.session_state.openai_api_key = load_api_key()
+    if 'gemini_api_key' not in st.session_state:
+        st.session_state.gemini_api_key = load_api_key()
     if 'summary_excel_path' not in st.session_state:
         st.session_state.summary_excel_path = None
     if 'ai_table_generated' not in st.session_state:
@@ -1043,24 +1043,24 @@ def main():
         """, unsafe_allow_html=True)
         st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
-        # ===== GPT-5.2 API 설정 =====
-        st.markdown('<div class="section-title"><span class="material-symbols-outlined" style="font-size:20px;color:#eca413;">smart_toy</span> GPT-5.2 API 설정</div>', unsafe_allow_html=True)
+        # ===== Gemini 3.1 Pro API 설정 =====
+        st.markdown('<div class="section-title"><span class="material-symbols-outlined" style="font-size:20px;color:#eca413;">smart_toy</span> Gemini 3.1 Pro API 설정</div>', unsafe_allow_html=True)
 
-        current_key = st.session_state.openai_api_key
+        current_key = st.session_state.gemini_api_key
 
-        if EXCEL_GENERATOR_AVAILABLE and OPENAI_AVAILABLE:
+        if EXCEL_GENERATOR_AVAILABLE and GEMINI_AVAILABLE:
             if current_key:
                 st.success(f"✅ API Key가 설정되어 있습니다. (마지막 4자리: ...{current_key[-4:]})")
-                st.caption("스크래핑 시 GPT-5.2가 데이터를 분석하여 요약 엑셀을 자동 생성합니다.")
+                st.caption("스크래핑 시 Gemini 3.1 Pro가 데이터를 분석하여 요약 엑셀을 자동 생성합니다.")
             else:
                 st.warning("⚠️ API Key가 설정되지 않았습니다.")
                 st.markdown("""
                 **설정 방법 (택 1):**
-                1. `.streamlit/secrets.toml` 파일에 `OPENAI_API_KEY = "sk-..."` 입력
-                2. 환경변수 `OPENAI_API_KEY` 설정
+                1. `.streamlit/secrets.toml` 파일에 `GEMINI_API_KEY = "AIza..."` 입력
+                2. 환경변수 `GEMINI_API_KEY` 설정
                 """)
         else:
-            st.error("⚠️ GPT-5.2 기능을 사용하려면 openai 패키지가 필요합니다: `pip install openai>=2.0.0`")
+            st.error("⚠️ Gemini 3.1 Pro 기능을 사용하려면 google-genai 패키지가 필요합니다: `pip install google-genai>=1.0.0`")
 
         st.divider()
 
@@ -1078,9 +1078,9 @@ def main():
         # ===== 앱 정보 =====
         st.markdown('<div class="section-title"><span class="material-symbols-outlined" style="font-size:20px;color:#eca413;">info</span> 앱 정보</div>', unsafe_allow_html=True)
         st.markdown("""
-        **저축은행 공시자료 크롤링 시스템 v4.1**
+        **저축은행 공시자료 크롤링 시스템 v4.2**
         - 79개 저축은행 분기공시/결산공시 데이터 자동 수집
-        - GPT-5.2 API를 활용한 AI 표 정리 및 엑셀 자동 생성
+        - Gemini 3.1 Pro API를 활용한 AI 표 정리 및 엑셀 자동 생성
         - 통일경영공시/감사보고서 파일 일괄 다운로드
 
         **사용 방법:**
@@ -1280,9 +1280,9 @@ def main():
 
         st.divider()
 
-        # GPT 사용 여부는 Settings에서 설정된 API Key 기반으로 자동 판단
-        api_key = st.session_state.openai_api_key
-        use_chatgpt = bool(api_key) and EXCEL_GENERATOR_AVAILABLE and OPENAI_AVAILABLE
+        # Gemini 사용 여부는 Settings에서 설정된 API Key 기반으로 자동 판단
+        api_key = st.session_state.gemini_api_key
+        use_gemini = bool(api_key) and EXCEL_GENERATOR_AVAILABLE and GEMINI_AVAILABLE
 
         # ========== 은행 선택 섹션 ==========
         st.markdown('<div class="section-title"><span class="material-symbols-outlined" style="font-size:20px;color:#eca413;">account_balance</span> 은행 선택</div>', unsafe_allow_html=True)
@@ -1360,7 +1360,7 @@ def main():
                         scrape_type,
                         auto_zip,
                         download_filename,
-                        use_chatgpt=use_chatgpt,
+                        use_gemini=use_gemini,
                         api_key=api_key,
                         save_path=scraping_save_path
                     )
@@ -1498,9 +1498,9 @@ def main():
             st.write("")
 
             # ========== AI 표 정리 및 엑셀 반환 옵션 ==========
-            st.markdown("#### 🤖 GPT-5.2 AI 표 정리 및 엑셀 반환")
+            st.markdown("#### 🤖 Gemini 3.1 Pro AI 표 정리 및 엑셀 반환")
 
-            if EXCEL_GENERATOR_AVAILABLE and OPENAI_AVAILABLE and st.session_state.openai_api_key:
+            if EXCEL_GENERATOR_AVAILABLE and GEMINI_AVAILABLE and st.session_state.gemini_api_key:
                 if summary_excel_path and os.path.exists(summary_excel_path):
                     try:
                         preview_df = pd.read_excel(summary_excel_path, sheet_name='분기총괄')
@@ -1524,15 +1524,15 @@ def main():
                             type="secondary"
                         )
                 else:
-                    st.info("💡 GPT-5.2를 활용하여 스크래핑 데이터를 표로 정리하고 엑셀로 반환할 수 있습니다.")
+                    st.info("💡 Gemini 3.1 Pro를 활용하여 스크래핑 데이터를 표로 정리하고 엑셀로 반환할 수 있습니다.")
                     col1, col2, col3 = st.columns([1, 2, 1])
                     with col2:
                         if st.button("🤖 AI로 표 정리 및 엑셀 생성", width="stretch", type="secondary"):
-                            with st.spinner("GPT-5.2가 데이터를 분석하고 정합성을 검증하는 중..."):
+                            with st.spinner("Gemini 3.1 Pro가 데이터를 분석하고 정합성을 검증하는 중..."):
                                 try:
-                                    gen_result = generate_excel_with_chatgpt(
+                                    gen_result = generate_excel_with_gemini(
                                         scraped_results=results,
-                                        api_key=st.session_state.openai_api_key,
+                                        api_key=st.session_state.gemini_api_key,
                                         use_ai=True,
                                         validate=True
                                     )
@@ -1569,10 +1569,10 @@ def main():
                                 except Exception as e:
                                     st.error(f"AI 엑셀 생성 중 오류: {str(e)}")
             else:
-                if not st.session_state.openai_api_key:
+                if not st.session_state.gemini_api_key:
                     st.info("💡 Settings 페이지에서 API Key를 설정하면 AI 표 정리 기능을 사용할 수 있습니다.")
-                elif not EXCEL_GENERATOR_AVAILABLE or not OPENAI_AVAILABLE:
-                    st.info("💡 `pip install openai>=2.0.0` 설치 후 AI 표 정리 기능을 사용할 수 있습니다.")
+                elif not EXCEL_GENERATOR_AVAILABLE or not GEMINI_AVAILABLE:
+                    st.info("💡 `pip install google-genai>=1.0.0` 설치 후 AI 표 정리 기능을 사용할 수 있습니다.")
 
             st.write("")
 
@@ -1731,7 +1731,7 @@ def _display_validation_result(validation):
     st.caption("💡 엑셀 파일의 '정합성검증' 시트에서 전체 검증 결과를 확인할 수 있습니다.")
 
 
-def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_filename, use_chatgpt=False, api_key=None, save_path=None):
+def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_filename, use_gemini=False, api_key=None, save_path=None):
     """백그라운드 스레드에서 실행되는 스크래핑 워커.
 
     shared: 일반 Python dict (스레드 안전한 공유 상태).
@@ -1858,13 +1858,13 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
                 shared['zip_path'] = zip_path
                 logger.log_message("ZIP 파일 생성 완료")
 
-        # GPT-5.2 엑셀 생성
-        if use_chatgpt and api_key and EXCEL_GENERATOR_AVAILABLE:
+        # Gemini 3.1 Pro 엑셀 생성
+        if use_gemini and api_key and EXCEL_GENERATOR_AVAILABLE:
             progress['phase'] = 'ai_excel'
-            logger.log_message("GPT-5.2 API로 분기총괄 엑셀 생성 및 정합성 검증 시작")
+            logger.log_message("Gemini 3.1 Pro API로 분기총괄 엑셀 생성 및 정합성 검증 시작")
 
             try:
-                gen_result = generate_excel_with_chatgpt(
+                gen_result = generate_excel_with_gemini(
                     scraped_results=results,
                     api_key=api_key,
                     use_ai=True,
@@ -1877,7 +1877,7 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
                     shared['summary_excel_path'] = summary_excel_path
                     shared['validation_result'] = validation
                     shared['ai_table_generated'] = True
-                    logger.log_message("GPT-5.2 분기총괄 엑셀 생성 완료")
+                    logger.log_message("Gemini 3.1 Pro 분기총괄 엑셀 생성 완료")
 
                     if validation:
                         score = validation.get("score", 0)
@@ -1904,7 +1904,7 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
         shared['scraping_running'] = False
 
 
-def start_scraping(selected_banks, scrape_type, auto_zip, download_filename, use_chatgpt=False, api_key=None, save_path=None):
+def start_scraping(selected_banks, scrape_type, auto_zip, download_filename, use_gemini=False, api_key=None, save_path=None):
     """스크래핑 + 공시 다운로드를 병렬 백그라운드 스레드로 동시 시작"""
     # --- 세션 상태 초기화 ---
     st.session_state.scraping_running = True
@@ -1952,7 +1952,7 @@ def start_scraping(selected_banks, scrape_type, auto_zip, download_filename, use
     scraping_thread = threading.Thread(
         target=_scraping_worker,
         args=(scraping_shared, selected_banks, scrape_type, auto_zip, download_filename),
-        kwargs={'use_chatgpt': use_chatgpt, 'api_key': api_key, 'save_path': save_path},
+        kwargs={'use_gemini': use_gemini, 'api_key': api_key, 'save_path': save_path},
         daemon=True
     )
     st.session_state._scraping_thread = scraping_thread
