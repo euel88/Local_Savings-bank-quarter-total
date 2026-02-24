@@ -1885,11 +1885,17 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
             shared['logs'] = logger.messages.copy()
 
             try:
+                def _on_excel_ready(path):
+                    """엑셀 파일 생성 직후 호출 — Merge가 검증 완료를 기다리지 않고 즉시 사용 가능"""
+                    shared['summary_excel_path'] = path
+                    shared['ai_table_generated'] = True
+
                 gen_result = generate_excel_with_gemini(
                     scraped_results=results,
                     api_key=api_key,
                     use_ai=True,
-                    validate=True
+                    validate=True,
+                    early_path_callback=_on_excel_ready,
                 )
                 summary_excel_path = gen_result.get("filepath") if isinstance(gen_result, dict) else gen_result
                 validation = gen_result.get("validation") if isinstance(gen_result, dict) else None
@@ -2163,11 +2169,11 @@ def _disclosure_worker(shared, save_path=None, selected_banks=None, api_key=None
         if delinquency_data and scraping_ref is not None:
             progress['phase'] = 'merging'
             phase_start = time.time()
-            log_callback(f"\n[Merge] 스크래핑 완료 대기 중...")
+            log_callback(f"[Merge] 스크래핑 완료 대기 중...")
 
-            # 스크래핑 쪽이 아직 실행 중이면 최대 300초(5분) 대기
+            # 분기총괄 엑셀이 생성될 때까지 대기 (검증 완료를 기다리지 않음)
             waited = 0
-            while scraping_ref.get('scraping_running', False) and waited < 300:
+            while not scraping_ref.get('summary_excel_path') and scraping_ref.get('scraping_running', False) and waited < 300:
                 time.sleep(3)
                 waited += 3
                 if waited % 15 == 0:

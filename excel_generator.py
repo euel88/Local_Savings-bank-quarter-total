@@ -256,7 +256,8 @@ class GeminiExcelGenerator:
             print(f"엑셀 파일 읽기 오류: {e}")
             return {}
 
-    def generate_summary_excel(self, scraped_results, output_path=None, validate=True):
+    def generate_summary_excel(self, scraped_results, output_path=None, validate=True,
+                               early_path_callback=None):
         t0 = time.time()
         df = self.analyze_and_format_data(scraped_results)
         t1 = time.time()
@@ -267,14 +268,21 @@ class GeminiExcelGenerator:
                 tempfile.gettempdir(),
                 f"저축은행_분기총괄_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
             )
+
+        # 먼저 데이터만으로 엑셀 저장 (Merge 등 외부에서 즉시 사용 가능)
+        _write_styled_excel(df, output_path, None)
+        if early_path_callback:
+            early_path_callback(output_path)
+
         validation_result = None
         if validate:
             t2 = time.time()
             validation_result = self.validate_excel_data(df, scraped_results)
             t3 = time.time()
             print(f"[타이밍] 정합성 검증: {t3 - t2:.1f}초")
+            # 검증 결과 시트를 포함하여 재저장
+            _write_styled_excel(df, output_path, validation_result)
 
-        _write_styled_excel(df, output_path, validation_result)
         print(f"[타이밍] 엑셀 생성 전체: {time.time() - t0:.1f}초")
         return {"filepath": output_path, "validation": validation_result}
 
@@ -419,7 +427,7 @@ class GeminiExcelGenerator:
                     temperature=self.config.TEMPERATURE,
                     max_output_tokens=self.config.MAX_TOKENS,
                     response_mime_type="application/json",
-                    thinking_config=types.ThinkingConfig(thinking_level="medium"),
+                    thinking_config=types.ThinkingConfig(thinking_level="low"),
                 ),
             )
             result_text = response.text.strip()
@@ -782,12 +790,16 @@ def generate_excel_with_gemini(
     api_key=None,
     output_path=None,
     use_ai=True,
-    validate=True
+    validate=True,
+    early_path_callback=None,
 ):
     """편의 함수: 스크래핑 결과로 엑셀 생성 및 정합성 검증 (Gemini 3.1 Pro)"""
     if use_ai and GEMINI_AVAILABLE and api_key:
         generator = GeminiExcelGenerator(api_key=api_key)
-        return generator.generate_summary_excel(scraped_results, output_path, validate=validate)
+        return generator.generate_summary_excel(
+            scraped_results, output_path, validate=validate,
+            early_path_callback=early_path_callback,
+        )
     else:
         generator = DirectExcelGenerator()
         filepath = generator.create_from_scraped_data(scraped_results, output_path)
