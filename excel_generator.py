@@ -9,6 +9,7 @@ import pandas as pd
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
     from google import genai
@@ -87,6 +88,7 @@ class GeminiExcelGenerator:
             raise ValueError("Gemini API 키가 필요합니다.")
         self.client = genai.Client(api_key=self.api_key)
         self.config = ExcelGeneratorConfig()
+        self._excel_cache = {}  # filepath → data 캐시
 
     def extract_financial_data(self, bank_data):
         if isinstance(bank_data, pd.DataFrame):
@@ -147,7 +149,8 @@ class GeminiExcelGenerator:
             return {}
 
     def analyze_and_format_data(self, scraped_results):
-        formatted_data = []
+        # 1. 성공한 은행만 필터링 & 파일 데이터 사전 읽기 (캐시)
+        valid_items = []
         for idx, result in enumerate(scraped_results, start=1):
             if not result.get('success'):
                 continue
@@ -155,29 +158,53 @@ class GeminiExcelGenerator:
             filepath = result.get('filepath')
             date_info = result.get('date_info', '')
             bank_data = self._read_excel_data(filepath) if filepath else {}
+            valid_items.append((idx, bank_name, filepath, date_info, bank_data))
+
+        # 2. Gemini API 병렬 호출 (은행별 순차 → 최대 5개 동시)
+        extracted_map = {}
+
+        def _extract_single(item):
+            idx, bank_name, filepath, date_info, bank_data = item
             extracted = self.extract_financial_data(bank_data) if bank_data else {}
+            return (idx, bank_name, filepath, date_info, extracted)
+
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = {executor.submit(_extract_single, item): item for item in valid_items}
+            for future in as_completed(futures):
+                try:
+                    idx, bank_name, filepath, date_info, extracted = future.result()
+                    extracted_map[idx] = (bank_name, filepath, date_info, extracted)
+                except Exception as e:
+                    item = futures[future]
+                    extracted_map[item[0]] = (item[1], item[2], item[3], {})
+
+        # 3. DirectExcelGenerator fallback (누락 항목 보완)
+        formatted_data = []
+        fallback_gen = None
+        scrape_keys = [
+            "총자산_전기", "총자산_당기", "당기순이익_전기", "당기순이익_당기",
+            "자기자본_전기", "자기자본_당기", "총여신_전기", "총여신_당기",
+            "총수신_전기", "총수신_당기", "BIS비율_전기", "BIS비율_당기",
+            "고정이하여신비율_전기", "고정이하여신비율_당기",
+        ]
+
+        for idx in sorted(extracted_map.keys()):
+            bank_name, filepath, date_info, extracted = extracted_map[idx]
 
             key_fields = ["총자산_당기", "당기순이익_당기", "자기자본_당기"]
             has_key_data = any(
                 extracted.get(k) is not None and extracted.get(k) != ""
                 for k in key_fields
             )
-            # Gemini 결과에서 누락된 항목을 DirectExcelGenerator로 보완
-            # (연체율은 웹 스크래핑에 없고 PDF에서만 추출하므로 제외)
             if filepath:
-                scrape_keys = [
-                    "총자산_전기", "총자산_당기", "당기순이익_전기", "당기순이익_당기",
-                    "자기자본_전기", "자기자본_당기", "총여신_전기", "총여신_당기",
-                    "총수신_전기", "총수신_당기", "BIS비율_전기", "BIS비율_당기",
-                    "고정이하여신비율_전기", "고정이하여신비율_당기",
-                ]
                 has_missing = not has_key_data or any(
                     extracted.get(k) is None or extracted.get(k) == ""
                     for k in scrape_keys
                 )
                 if has_missing:
-                    fallback = DirectExcelGenerator()
-                    fallback_data = fallback._extract_from_file(filepath)
+                    if fallback_gen is None:
+                        fallback_gen = DirectExcelGenerator()
+                    fallback_data = fallback_gen._extract_from_file(filepath)
                     if fallback_data:
                         for k, v in fallback_data.items():
                             if v is not None and (extracted.get(k) is None or extracted.get(k) == ""):
@@ -214,12 +241,15 @@ class GeminiExcelGenerator:
     def _read_excel_data(self, filepath):
         if not filepath or not os.path.exists(filepath):
             return {}
+        if filepath in self._excel_cache:
+            return self._excel_cache[filepath]
         try:
             data = {}
             xl = pd.ExcelFile(filepath)
             for sheet_name in xl.sheet_names:
                 df = xl.parse(sheet_name)
                 data[sheet_name] = df.to_dict()
+            self._excel_cache[filepath] = data
             return data
         except Exception as e:
             print(f"엑셀 파일 읽기 오류: {e}")

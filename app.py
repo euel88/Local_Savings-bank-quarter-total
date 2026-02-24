@@ -44,8 +44,9 @@ try:
         extract_all_delinquency,
         patch_excel_with_delinquency,
         PDFPLUMBER_AVAILABLE,
+        GEMINI_AVAILABLE as GEMINI_PDF_AVAILABLE,
     )
-    PDF_EXTRACTOR_AVAILABLE = PDFPLUMBER_AVAILABLE
+    PDF_EXTRACTOR_AVAILABLE = PDFPLUMBER_AVAILABLE or GEMINI_PDF_AVAILABLE
 except ImportError:
     PDF_EXTRACTOR_AVAILABLE = False
 
@@ -1781,8 +1782,6 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
             logger.log_message(f"[{status}] {bank} - 공시일: {date_info}")
             shared['logs'] = logger.messages.copy()
 
-            time.sleep(0.5)
-
         # ========== 실패 은행 자동 재시도 ==========
         MAX_RETRY_ROUNDS = 2
         for retry_round in range(1, MAX_RETRY_ROUNDS + 1):
@@ -1815,8 +1814,6 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
                 logger.log_message(f"[재시도 {retry_round}] {bank} 스크래핑 재시도...")
                 shared['logs'] = logger.messages.copy()
 
-                time.sleep(1)  # 재시도 전 잠시 대기
-
                 filepath, success, date_info = scraper.scrape_bank(bank)
 
                 if success:
@@ -1833,8 +1830,6 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
 
                 progress['partial_results'] = list(results)
                 shared['logs'] = logger.messages.copy()
-
-                time.sleep(0.5)
 
         # 최종 실패 은행 로그
         final_failed = [r['bank'] for r in results if not r.get('success')]
@@ -1986,6 +1981,7 @@ def start_scraping(selected_banks, scrape_type, auto_zip, download_filename, use
         disclosure_thread = threading.Thread(
             target=_disclosure_worker,
             args=(disclosure_shared, disclosure_save, selected_banks),
+            kwargs={'api_key': api_key},
             daemon=True
         )
         st.session_state._disclosure_thread = disclosure_thread
@@ -2000,11 +1996,11 @@ def start_scraping(selected_banks, scrape_type, auto_zip, download_filename, use
 
 
 
-def _disclosure_worker(shared, save_path=None, selected_banks=None):
+def _disclosure_worker(shared, save_path=None, selected_banks=None, api_key=None):
     """백그라운드 스레드에서 실행되는 공시파일 다운로드 워커 (5~7단계).
 
     5. 공시파일 다운로드 (selected_banks가 있으면 해당 은행만)
-    6. PDF 연체율 추출 + 연체율 엑셀 생성
+    6. PDF 연체율 추출 + 연체율 엑셀 생성 (Gemini OCR 우선, pdfplumber fallback)
     7. 스크래핑 쪽 분기총괄 엑셀이 준비되면 연체율 merge
     """
     progress = shared['progress']
@@ -2110,6 +2106,7 @@ def _disclosure_worker(shared, save_path=None, selected_banks=None):
             try:
                 delinquency_data = extract_all_delinquency(
                     download_path,
+                    api_key=api_key,
                     log_callback=log_callback
                 )
                 if delinquency_data:
@@ -2117,6 +2114,7 @@ def _disclosure_worker(shared, save_path=None, selected_banks=None):
 
                 delinquency_path = create_delinquency_excel(
                     download_path=download_path,
+                    api_key=api_key,
                     log_callback=log_callback
                 )
                 if delinquency_path:
