@@ -1982,7 +1982,7 @@ def start_scraping(selected_banks, scrape_type, auto_zip, download_filename, use
 
         disclosure_thread = threading.Thread(
             target=_disclosure_worker,
-            args=(disclosure_shared, disclosure_save),
+            args=(disclosure_shared, disclosure_save, selected_banks),
             daemon=True
         )
         st.session_state._disclosure_thread = disclosure_thread
@@ -1997,10 +1997,10 @@ def start_scraping(selected_banks, scrape_type, auto_zip, download_filename, use
 
 
 
-def _disclosure_worker(shared, save_path=None):
+def _disclosure_worker(shared, save_path=None, selected_banks=None):
     """백그라운드 스레드에서 실행되는 공시파일 다운로드 워커 (5~7단계).
 
-    5. 공시파일 다운로드
+    5. 공시파일 다운로드 (selected_banks가 있으면 해당 은행만)
     6. PDF 연체율 추출 + 연체율 엑셀 생성
     7. 스크래핑 쪽 분기총괄 엑셀이 준비되면 연체율 merge
     """
@@ -2037,6 +2037,16 @@ def _disclosure_worker(shared, save_path=None):
             log_callback("오류: 은행 목록 추출 실패")
             shared['running'] = False
             return
+
+        # 선택한 은행만 필터링
+        if selected_banks:
+            selected_set = set(selected_banks)
+            bank_list = [b for b in bank_list if b.get('name') in selected_set]
+            if not bank_list:
+                log_callback("선택한 은행이 공시파일 목록에 없습니다.")
+                progress['phase'] = 'done'
+                return
+            log_callback(f"선택된 {len(bank_list)}개 은행만 다운로드")
 
         total = len(bank_list)
         progress['total_banks'] = total
