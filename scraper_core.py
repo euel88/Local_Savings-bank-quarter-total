@@ -134,6 +134,9 @@ def create_driver():
         options.add_argument('--disable-gpu')
         options.add_argument('--window-size=1280,800')
 
+        # DOM 준비 시 즉시 진행 (전체 리소스 로드 대기 안 함)
+        options.page_load_strategy = 'eager'
+
         # 고유한 user-data-dir로 Chrome 프로필 잠금 충돌 방지
         user_data_dir = tempfile.mkdtemp(prefix="chrome_scraper_")
         options.add_argument(f'--user-data-dir={user_data_dir}')
@@ -141,7 +144,6 @@ def create_driver():
         options.add_argument('--log-level=3')
         options.add_argument('--silent')
         options.add_argument('--disable-extensions')
-        options.add_argument('--disable-browser-side-navigation')
         options.add_argument('--disable-infobars')
         options.add_argument('--disable-notifications')
         options.add_argument('--disable-popup-blocking')
@@ -271,7 +273,11 @@ class BankScraper:
     def select_bank(self, driver, bank_name):
         """은행을 선택합니다."""
         try:
-            driver.get(self.config.BASE_URL)
+            try:
+                driver.get(self.config.BASE_URL)
+            except Exception:
+                # page_load_timeout 초과해도 DOM은 이미 준비되었을 수 있음
+                pass
             WaitUtils.wait_for_page_load(driver, self.config.PAGE_LOAD_TIMEOUT)
             WaitUtils.wait_with_random(0.5, 1)
 
