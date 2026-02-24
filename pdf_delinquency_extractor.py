@@ -1,8 +1,8 @@
 """
-통일경영공시 PDF에서 은행별 연체율을 추출하여 엑셀로 정리하는 모듈.
-- Gemini OCR 기반 추출 (1차) — 금액기준 연체율만 추출
-- pdfplumber 기반 텍스트/테이블 추출 (fallback)
-- 연체율(%) 값만 추출
+통일경영공시 PDF에서 은행별 연체대출비율을 추출하여 엑셀로 정리하는 모듈.
+- 자산건전성 지표 항목 내 연체대출비율(금액기준)을 타겟으로 추출
+- Gemini OCR 기반 추출 (1차)
+- pdfplumber 기반 테이블/텍스트 추출 (fallback, 자산건전성 지표 페이지 우선)
 - 별도 엑셀 파일로 생성
 """
 
@@ -32,19 +32,28 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# 금액기준 연체율 우선 키워드 (건수기준 제외)
+# 자산건전성 지표 섹션 감지 키워드
+_ASSET_QUALITY_KEYWORDS = [
+    "자산건전성지표",
+    "자산건전성 지표",
+    "자산건전성",
+]
+
+# 금액기준 연체대출비율 우선 키워드
 _AMOUNT_BASED_KEYWORDS = [
+    "연체대출비율(금액기준)",
     "연체대출채권비율(금액기준)",
     "연체대출금비율(금액기준)",
     "연체율(금액기준)",
     "연체비율(금액기준)",
 ]
 
-# 일반 연체율 키워드 (건수기준 미포함 시 사용)
+# 일반 연체대출비율 키워드 (자산건전성 지표 내에서 탐색)
 _GENERIC_DELINQUENCY_KEYWORDS = [
-    "연체율",
+    "연체대출비율",
     "연체대출채권비율",
     "연체대출금비율",
+    "연체율",
     "연체비율",
 ]
 
@@ -104,10 +113,13 @@ def _extract_with_gemini(pdf_path: str, api_key: str, log_callback=None) -> Opti
             return None
 
         prompt = (
-            "이 통일경영공시 PDF에서 연체대출채권비율(연체율)을 찾아주세요.\n\n"
-            "중요: PDF에 '건수기준'과 '금액기준' 두 종류가 있을 수 있습니다.\n"
-            "반드시 **금액기준** 연체대출채권비율만 추출하세요.\n"
-            "건수기준은 절대 사용하지 마세요.\n\n"
+            "이 통일경영공시 PDF에서 '자산건전성 지표' 항목 내 '연체대출비율'을 찾아주세요.\n\n"
+            "중요 사항:\n"
+            "1. 반드시 '자산건전성 지표' 섹션에 있는 '연체대출비율'만 추출하세요.\n"
+            "2. PDF에 '건수기준'과 '금액기준' 두 종류가 있을 수 있습니다.\n"
+            "   반드시 **금액기준** 연체대출비율만 추출하세요. 건수기준은 절대 사용하지 마세요.\n"
+            "3. '연체대출비율', '연체대출채권비율', '연체율' 등 표현이 다를 수 있으나 "
+            "모두 같은 항목입니다.\n\n"
             "공시기준(당기) 값과 전년동기(전기) 값을 각각 추출해주세요.\n"
             "반드시 아래 JSON 형식으로만 응답하세요:\n"
             '{"연체율_당기": "숫자", "연체율_전기": "숫자"}\n'
@@ -198,22 +210,47 @@ def extract_delinquency_from_pdf(
 
     try:
         with pdfplumber.open(pdf_path) as pdf:
-            # 2차: 테이블 추출 시도 (금액기준 우선)
+            # 자산건전성 지표 섹션이 있는 페이지를 우선 탐색
+            asset_quality_pages = []
+            other_pages = []
             for page_num, page in enumerate(pdf.pages):
+                text = page.extract_text() or ""
+                text_clean = text.replace(" ", "")
+                if any(kw.replace(" ", "") in text_clean for kw in _ASSET_QUALITY_KEYWORDS):
+                    asset_quality_pages.append((page_num, page))
+                else:
+                    other_pages.append((page_num, page))
+
+            # 2차: 자산건전성 지표 페이지 테이블에서 우선 탐색
+            for page_num, page in asset_quality_pages:
                 result = _search_delinquency_in_page(page)
                 if result:
-                    log(f"    [pdfplumber 테이블] 페이지 {page_num + 1}에서 연체율 발견")
+                    log(f"    [pdfplumber 테이블] 자산건전성 지표 페이지 {page_num + 1}에서 연체대출비율 발견")
                     return result
 
-            # 3차: 텍스트 기반 추출
-            for page_num, page in enumerate(pdf.pages):
+            # 2-1차: 자산건전성 페이지가 없으면 전체 페이지 테이블 탐색
+            for page_num, page in other_pages:
+                result = _search_delinquency_in_page(page)
+                if result:
+                    log(f"    [pdfplumber 테이블] 페이지 {page_num + 1}에서 연체대출비율 발견")
+                    return result
+
+            # 3차: 자산건전성 지표 페이지 텍스트 탐색
+            for page_num, page in asset_quality_pages:
                 result = _search_delinquency_in_text(page)
                 if result:
-                    log(f"    [pdfplumber 텍스트] 페이지 {page_num + 1}에서 연체율 발견")
+                    log(f"    [pdfplumber 텍스트] 자산건전성 지표 페이지 {page_num + 1}에서 연체대출비율 발견")
+                    return result
+
+            # 3-1차: 전체 페이지 텍스트 탐색
+            for page_num, page in other_pages:
+                result = _search_delinquency_in_text(page)
+                if result:
+                    log(f"    [pdfplumber 텍스트] 페이지 {page_num + 1}에서 연체대출비율 발견")
                     return result
 
             # 실패 시 디버그 정보
-            log(f"    [디버그] 총 {len(pdf.pages)}페이지 검색했으나 연체율 미발견")
+            log(f"    [디버그] 총 {len(pdf.pages)}페이지 검색했으나 연체대출비율 미발견 (자산건전성 지표 페이지: {len(asset_quality_pages)}개)")
 
     except Exception as e:
         logger.error(f"PDF 파싱 오류 ({pdf_path}): {e}")
@@ -353,7 +390,7 @@ def _search_delinquency_in_text(page) -> Optional[Dict[str, str]]:
     text_clean = text.replace(" ", "")
 
     # 1순위: 금액기준 명시적 패턴
-    for kw in ["연체대출채권비율(금액기준)", "연체대출금비율(금액기준)", "연체율(금액기준)"]:
+    for kw in ["연체대출비율(금액기준)", "연체대출채권비율(금액기준)", "연체대출금비율(금액기준)", "연체율(금액기준)"]:
         kw_clean = kw.replace(" ", "")
         if kw_clean not in text_clean:
             continue
