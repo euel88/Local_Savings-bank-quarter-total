@@ -56,8 +56,8 @@ class Config:
     QUARTERLY_URL = "https://www.fsb.or.kr/busmagequar_0100.act"  # 분기공시 URL
     SETTLEMENT_URL = "https://www.fsb.or.kr/busmagesett_0100.act"  # 결산공시 URL
     MAX_RETRIES = 2
-    PAGE_LOAD_TIMEOUT = 10
-    WAIT_TIMEOUT = 5
+    PAGE_LOAD_TIMEOUT = 30
+    WAIT_TIMEOUT = 10
     MAX_WORKERS = 3
 
     # 전체 79개 저축은행 목록
@@ -195,7 +195,7 @@ def create_driver():
             except:
                 driver = webdriver.Chrome(options=options)
 
-        driver.set_page_load_timeout(10)
+        driver.set_page_load_timeout(30)
         return driver
 
 
