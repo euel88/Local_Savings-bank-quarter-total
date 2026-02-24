@@ -1747,6 +1747,13 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
     progress['phase'] = 'scraping'
     progress['partial_results'] = []
 
+    def _elapsed(since):
+        """경과 시간을 읽기 쉬운 문자열로 반환"""
+        sec = time.time() - since
+        if sec < 60:
+            return f"{sec:.1f}초"
+        return f"{int(sec // 60)}분 {int(sec % 60)}초"
+
     try:
         config = Config(scrape_type, output_dir=save_path if save_path else None)
         logger = StreamlitLogger()
@@ -1757,6 +1764,12 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
         results = []
         bank_dates = {}
 
+        logger.log_message(f"{'='*50}")
+        logger.log_message(f"[1단계] 스크래핑 시작 ({total_banks}개 은행)")
+        logger.log_message(f"{'='*50}")
+        shared['logs'] = logger.messages.copy()
+        phase_start = time.time()
+
         for idx, bank in enumerate(selected_banks):
             progress['current_bank'] = bank
             progress['current_idx'] = idx + 1
@@ -1764,9 +1777,10 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
             elapsed = time.time() - start_time
             shared['elapsed_time'] = elapsed
 
-            logger.log_message(f"[시작] {bank} 스크래핑")
-
+            bank_start = time.time()
             filepath, success, date_info = scraper.scrape_bank(bank)
+            bank_elapsed = time.time() - bank_start
+
             result = {
                 'bank': bank,
                 'success': success,
@@ -1778,9 +1792,14 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
 
             progress['partial_results'] = list(results)
 
-            status = "완료" if success else "실패"
-            logger.log_message(f"[{status}] {bank} - 공시일: {date_info}")
+            status = "✅" if success else "❌"
+            logger.log_message(f"  {status} {bank} ({bank_elapsed:.1f}초) - 공시일: {date_info}")
             shared['logs'] = logger.messages.copy()
+
+        scrape_elapsed = _elapsed(phase_start)
+        success_count = sum(1 for r in results if r.get('success'))
+        logger.log_message(f"[1단계 완료] 스크래핑 {scrape_elapsed} (성공 {success_count}/{total_banks})")
+        shared['logs'] = logger.messages.copy()
 
         # ========== 실패 은행 자동 재시도 ==========
         MAX_RETRY_ROUNDS = 2
@@ -1791,10 +1810,10 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
 
             failed_banks = [results[i]['bank'] for i in failed_indices]
             logger.log_message(
-                f"\n{'='*40}\n"
+                f"\n{'='*50}\n"
                 f"[재시도 {retry_round}/{MAX_RETRY_ROUNDS}] "
-                f"실패 은행 {len(failed_banks)}개 재시도: {', '.join(failed_banks)}\n"
-                f"{'='*40}"
+                f"실패 은행 {len(failed_banks)}개: {', '.join(failed_banks)}\n"
+                f"{'='*50}"
             )
             shared['logs'] = logger.messages.copy()
 
@@ -1811,10 +1830,9 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
                 elapsed = time.time() - start_time
                 shared['elapsed_time'] = elapsed
 
-                logger.log_message(f"[재시도 {retry_round}] {bank} 스크래핑 재시도...")
-                shared['logs'] = logger.messages.copy()
-
+                bank_start = time.time()
                 filepath, success, date_info = scraper.scrape_bank(bank)
+                bank_elapsed = time.time() - bank_start
 
                 if success:
                     results[orig_idx] = {
@@ -1824,9 +1842,9 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
                         'date_info': date_info
                     }
                     bank_dates[bank] = date_info
-                    logger.log_message(f"[재시도 성공] {bank} - 공시일: {date_info}")
+                    logger.log_message(f"  ✅ [재시도 성공] {bank} ({bank_elapsed:.1f}초)")
                 else:
-                    logger.log_message(f"[재시도 실패] {bank}")
+                    logger.log_message(f"  ❌ [재시도 실패] {bank} ({bank_elapsed:.1f}초)")
 
                 progress['partial_results'] = list(results)
                 shared['logs'] = logger.messages.copy()
@@ -1850,16 +1868,21 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
         # ZIP 압축
         if auto_zip:
             progress['phase'] = 'zipping'
-            logger.log_message("ZIP 파일 압축 중...")
+            phase_start = time.time()
+            logger.log_message(f"\n[2단계] ZIP 파일 압축 중...")
             zip_path = scraper.create_zip_archive(results, download_filename)
             if zip_path:
                 shared['zip_path'] = zip_path
-                logger.log_message("ZIP 파일 생성 완료")
+                logger.log_message(f"[2단계 완료] ZIP 생성 ({_elapsed(phase_start)})")
 
         # Gemini 3.1 Pro 엑셀 생성
         if use_gemini and api_key and EXCEL_GENERATOR_AVAILABLE:
             progress['phase'] = 'ai_excel'
-            logger.log_message("Gemini 3.1 Pro API로 분기총괄 엑셀 생성 및 정합성 검증 시작")
+            phase_start = time.time()
+            logger.log_message(f"\n{'='*50}")
+            logger.log_message(f"[3단계] AI 분기총괄 엑셀 생성 시작")
+            logger.log_message(f"{'='*50}")
+            shared['logs'] = logger.messages.copy()
 
             try:
                 gen_result = generate_excel_with_gemini(
@@ -1875,22 +1898,26 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
                     shared['summary_excel_path'] = summary_excel_path
                     shared['validation_result'] = validation
                     shared['ai_table_generated'] = True
-                    logger.log_message("Gemini 3.1 Pro 분기총괄 엑셀 생성 완료")
+                    logger.log_message(f"[3단계 완료] 엑셀 생성 ({_elapsed(phase_start)})")
 
                     if validation:
                         score = validation.get("score", 0)
                         error_count = len(validation.get("errors", []))
                         warn_count = len(validation.get("warnings", []))
                         logger.log_message(
-                            f"정합성 검증 완료 - 점수: {score}/100, "
-                            f"오류: {error_count}건, 경고: {warn_count}건"
+                            f"  정합성 검증: 점수 {score}/100, "
+                            f"오류 {error_count}건, 경고 {warn_count}건"
                         )
                         if not validation.get("is_valid"):
-                            logger.log_message("⚠️ 정합성 검증에서 오류가 발견되었습니다. 결과를 확인하세요.")
+                            logger.log_message("  ⚠️ 검증 오류 발견 — 결과를 확인하세요.")
             except Exception as e:
-                logger.log_message(f"AI 엑셀 생성 오류: {str(e)}")
+                logger.log_message(f"  ❌ AI 엑셀 생성 오류: {str(e)}")
 
-        # 완료
+        # 완료 요약
+        total_elapsed = _elapsed(start_time)
+        logger.log_message(f"\n{'='*50}")
+        logger.log_message(f"[완료] 전체 소요시간: {total_elapsed}")
+        logger.log_message(f"{'='*50}")
         shared['logs'] = logger.messages.copy()
         progress['phase'] = 'done'
 
@@ -2096,13 +2123,18 @@ def _disclosure_worker(shared, save_path=None, selected_banks=None, api_key=None
         # 결과 저장
         shared['results'] = list(downloader.results) if hasattr(downloader, 'results') else []
         success = len([r for r in shared['results'] if r.get('상태') in ['완료', '부분완료']])
-        log_callback(f"다운로드 완료! 성공: {success}/{total}, 총 {total_downloaded}개 파일")
+        dl_elapsed = time.time() - progress['start_time']
+        dl_elapsed_str = f"{int(dl_elapsed // 60)}분 {int(dl_elapsed % 60)}초" if dl_elapsed >= 60 else f"{dl_elapsed:.1f}초"
+        log_callback(f"[다운로드 완료] 성공: {success}/{total}, 파일 {total_downloaded}개 ({dl_elapsed_str})")
 
         # 6. 통일경영공시 PDF에서 연체율 추출 + 연체율 엑셀 생성
         delinquency_data = None
         if PDF_EXTRACTOR_AVAILABLE:
             progress['phase'] = 'extracting_pdf'
-            log_callback("통일경영공시 PDF에서 연체율 추출 중...")
+            phase_start = time.time()
+            log_callback(f"\n{'='*50}")
+            log_callback("[연체율 추출] 통일경영공시 PDF에서 연체율 추출 시작")
+            log_callback(f"{'='*50}")
             try:
                 delinquency_data = extract_all_delinquency(
                     download_path,
@@ -2119,23 +2151,30 @@ def _disclosure_worker(shared, save_path=None, selected_banks=None, api_key=None
                 )
                 if delinquency_path:
                     shared['delinquency_excel_path'] = delinquency_path
+
+                pdf_elapsed = time.time() - phase_start
+                pdf_elapsed_str = f"{int(pdf_elapsed // 60)}분 {int(pdf_elapsed % 60)}초" if pdf_elapsed >= 60 else f"{pdf_elapsed:.1f}초"
+                log_callback(f"[연체율 추출 완료] 소요시간: {pdf_elapsed_str}")
             except Exception as e:
-                log_callback(f"연체율 추출 오류: {str(e)}")
+                log_callback(f"❌ 연체율 추출 오류: {str(e)}")
 
         # 7. Merge: 스크래핑 쪽의 분기총괄 엑셀에 연체율 기입
         if delinquency_data and scraping_ref is not None:
             progress['phase'] = 'merging'
-            log_callback("스크래핑 완료 대기 및 분기총괄 엑셀에 연체율 merge 중...")
+            phase_start = time.time()
+            log_callback(f"\n[Merge] 스크래핑 완료 대기 중...")
 
             # 스크래핑 쪽이 아직 실행 중이면 최대 300초(5분) 대기
             waited = 0
             while scraping_ref.get('scraping_running', False) and waited < 300:
                 time.sleep(3)
                 waited += 3
+                if waited % 15 == 0:
+                    log_callback(f"  스크래핑 대기 중... ({waited}초 경과)")
 
             summary_path = scraping_ref.get('summary_excel_path')
             if summary_path and os.path.exists(summary_path):
-                log_callback("분기총괄 엑셀에 연체율 기입 중...")
+                log_callback("[Merge] 분기총괄 엑셀에 연체율 기입 중...")
                 try:
                     patch_excel_with_delinquency(
                         summary_path,
@@ -2143,15 +2182,22 @@ def _disclosure_worker(shared, save_path=None, selected_banks=None, api_key=None
                         log_callback=log_callback
                     )
                     shared['merge_done'] = True
-                    log_callback("연체율 merge 완료!")
+                    merge_elapsed = time.time() - phase_start
+                    log_callback(f"[Merge 완료] 소요시간: {merge_elapsed:.1f}초")
                 except Exception as e:
-                    log_callback(f"연체율 merge 오류: {str(e)}")
+                    log_callback(f"❌ Merge 오류: {str(e)}")
             else:
-                log_callback("분기총괄 엑셀이 생성되지 않아 merge를 건너뜁니다.")
+                log_callback("[Merge] 분기총괄 엑셀이 생성되지 않아 건너뜁니다.")
 
         downloader.cleanup()
 
-        # 완료 표시
+        # 완료 요약
+        total_elapsed = time.time() - progress['start_time']
+        total_str = f"{int(total_elapsed // 60)}분 {int(total_elapsed % 60)}초" if total_elapsed >= 60 else f"{total_elapsed:.1f}초"
+        log_callback(f"\n{'='*50}")
+        log_callback(f"[전체 완료] 공시 다운로드 + 연체율 추출 총 소요시간: {total_str}")
+        log_callback(f"{'='*50}")
+
         progress['phase'] = 'done'
 
     except Exception as e:

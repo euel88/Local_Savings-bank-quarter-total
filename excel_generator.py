@@ -5,6 +5,7 @@ Gemini 3.1 Pro Preview API를 활용한 저축은행 데이터 엑셀 생성 모
 
 import os
 import json
+import time
 import pandas as pd
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -256,7 +257,11 @@ class GeminiExcelGenerator:
             return {}
 
     def generate_summary_excel(self, scraped_results, output_path=None, validate=True):
+        t0 = time.time()
         df = self.analyze_and_format_data(scraped_results)
+        t1 = time.time()
+        print(f"[타이밍] AI 데이터 추출: {t1 - t0:.1f}초")
+
         if output_path is None:
             output_path = os.path.join(
                 tempfile.gettempdir(),
@@ -264,8 +269,13 @@ class GeminiExcelGenerator:
             )
         validation_result = None
         if validate:
+            t2 = time.time()
             validation_result = self.validate_excel_data(df, scraped_results)
+            t3 = time.time()
+            print(f"[타이밍] 정합성 검증: {t3 - t2:.1f}초")
+
         _write_styled_excel(df, output_path, validation_result)
+        print(f"[타이밍] 엑셀 생성 전체: {time.time() - t0:.1f}초")
         return {"filepath": output_path, "validation": validation_result}
 
     def validate_excel_data(self, df, scraped_results):
