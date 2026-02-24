@@ -1,6 +1,6 @@
 """
 통일경영공시 PDF에서 은행별 연체율을 추출하여 엑셀로 정리하는 모듈.
-- Gemini OCR 기반 추출 (1차)
+- Gemini OCR 기반 추출 (1차) — 금액기준 연체율만 추출
 - pdfplumber 기반 텍스트/테이블 추출 (fallback)
 - 연체율(%) 값만 추출
 - 별도 엑셀 파일로 생성
@@ -9,9 +9,11 @@
 import os
 import re
 import json
+import time
 import logging
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 
@@ -30,21 +32,53 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# 연체율 관련 키워드 (통일경영공시 PDF에서 사용되는 다양한 표현)
-_DELINQUENCY_KEYWORDS = [
+# 금액기준 연체율 우선 키워드 (건수기준 제외)
+_AMOUNT_BASED_KEYWORDS = [
+    "연체대출채권비율(금액기준)",
+    "연체대출금비율(금액기준)",
+    "연체율(금액기준)",
+    "연체비율(금액기준)",
+]
+
+# 일반 연체율 키워드 (건수기준 미포함 시 사용)
+_GENERIC_DELINQUENCY_KEYWORDS = [
     "연체율",
     "연체대출채권비율",
     "연체대출금비율",
     "연체비율",
 ]
 
+# 건수기준 키워드 (제외 대상)
+_COUNT_BASED_KEYWORDS = [
+    "건수기준",
+    "건기준",
+]
 
-def _is_delinquency_cell(text: str) -> bool:
-    """셀 텍스트가 연체율 관련 항목인지 판별한다."""
+
+def _classify_delinquency_cell(text: str) -> Optional[str]:
+    """
+    셀 텍스트가 연체율 관련 항목인지 판별하고, 유형을 반환한다.
+
+    Returns:
+        "amount" (금액기준 — 우선), "generic" (일반), "count" (건수기준 — 후순위), None (무관)
+    """
     if not text:
-        return False
+        return None
     cleaned = text.strip().replace(" ", "").replace("\n", "")
-    return any(kw in cleaned for kw in _DELINQUENCY_KEYWORDS)
+
+    # 1. 금액기준 명시 → 최우선
+    if any(kw.replace(" ", "") in cleaned for kw in _AMOUNT_BASED_KEYWORDS):
+        return "amount"
+
+    # 2. 건수기준 명시 → 후순위 (가능하면 제외)
+    if any(kw in cleaned for kw in _COUNT_BASED_KEYWORDS):
+        return "count"
+
+    # 3. 일반 연체율 키워드
+    if any(kw in cleaned for kw in _GENERIC_DELINQUENCY_KEYWORDS):
+        return "generic"
+
+    return None
 
 
 # ============================================================
@@ -53,14 +87,7 @@ def _is_delinquency_cell(text: str) -> bool:
 
 def _extract_with_gemini(pdf_path: str, api_key: str, log_callback=None) -> Optional[Dict[str, str]]:
     """
-    Gemini API의 OCR 기능으로 PDF에서 연체율을 추출한다.
-
-    Args:
-        pdf_path: PDF 파일 경로
-        api_key: Gemini API 키
-
-    Returns:
-        {"연체율_당기": "2.35", "연체율_전기": "1.98"} 또는 None
+    Gemini API의 OCR 기능으로 PDF에서 금액기준 연체율을 추출한다.
     """
     def log(msg):
         if log_callback:
@@ -69,17 +96,18 @@ def _extract_with_gemini(pdf_path: str, api_key: str, log_callback=None) -> Opti
     try:
         client = genai.Client(api_key=api_key)
 
-        # PDF 파일을 바이트로 읽어서 Gemini에 전송
         with open(pdf_path, "rb") as f:
             pdf_bytes = f.read()
 
-        # PDF 크기 제한 (20MB 이상이면 건너뜀)
         if len(pdf_bytes) > 20 * 1024 * 1024:
             log("    [Gemini] PDF 크기가 20MB를 초과하여 건너뜁니다.")
             return None
 
         prompt = (
-            "이 통일경영공시 PDF에서 연체율 또는 연체대출채권비율을 찾아주세요.\n"
+            "이 통일경영공시 PDF에서 연체대출채권비율(연체율)을 찾아주세요.\n\n"
+            "중요: PDF에 '건수기준'과 '금액기준' 두 종류가 있을 수 있습니다.\n"
+            "반드시 **금액기준** 연체대출채권비율만 추출하세요.\n"
+            "건수기준은 절대 사용하지 마세요.\n\n"
             "공시기준(당기) 값과 전년동기(전기) 값을 각각 추출해주세요.\n"
             "반드시 아래 JSON 형식으로만 응답하세요:\n"
             '{"연체율_당기": "숫자", "연체율_전기": "숫자"}\n'
@@ -104,7 +132,6 @@ def _extract_with_gemini(pdf_path: str, api_key: str, log_callback=None) -> Opti
         )
 
         result_text = response.text.strip()
-        # JSON 파싱
         if "```json" in result_text:
             result_text = result_text.split("```json")[1].split("```")[0].strip()
         elif "```" in result_text:
@@ -125,7 +152,7 @@ def _extract_with_gemini(pdf_path: str, api_key: str, log_callback=None) -> Opti
                     pass
 
         if result:
-            log(f"    [Gemini OCR] 연체율 추출 성공")
+            log(f"    [Gemini OCR] 금액기준 연체율 추출 성공: 당기 {result.get('연체율_당기', '-')}% / 전기 {result.get('연체율_전기', '-')}%")
             return result
         else:
             log(f"    [Gemini OCR] 유효한 연체율 값 없음")
@@ -148,11 +175,8 @@ def extract_delinquency_from_pdf(
     """
     단일 통일경영공시 PDF에서 연체율 값을 추출한다.
     1차: Gemini OCR (api_key가 있을 때)
-    2차: pdfplumber 테이블 추출
+    2차: pdfplumber 테이블 추출 (금액기준 우선)
     3차: pdfplumber 텍스트 정규식
-
-    Returns:
-        {"연체율_당기": "2.35", "연체율_전기": "1.98"} 형태 또는 None
     """
     def log(msg):
         if log_callback:
@@ -174,7 +198,7 @@ def extract_delinquency_from_pdf(
 
     try:
         with pdfplumber.open(pdf_path) as pdf:
-            # 2차: 테이블 추출 시도
+            # 2차: 테이블 추출 시도 (금액기준 우선)
             for page_num, page in enumerate(pdf.pages):
                 result = _search_delinquency_in_page(page)
                 if result:
@@ -188,16 +212,8 @@ def extract_delinquency_from_pdf(
                     log(f"    [pdfplumber 텍스트] 페이지 {page_num + 1}에서 연체율 발견")
                     return result
 
-            # 실패 시 디버그 정보 출력
+            # 실패 시 디버그 정보
             log(f"    [디버그] 총 {len(pdf.pages)}페이지 검색했으나 연체율 미발견")
-            for page_num, page in enumerate(pdf.pages):
-                text = page.extract_text() or ""
-                for kw in _DELINQUENCY_KEYWORDS:
-                    if kw in text.replace(" ", ""):
-                        idx = text.replace(" ", "").index(kw)
-                        snippet = text[max(0, idx - 20):idx + 80]
-                        log(f"    [디버그] 페이지 {page_num + 1}에 '{kw}' 키워드 존재 (주변: ...{snippet}...)")
-                        break
 
     except Exception as e:
         logger.error(f"PDF 파싱 오류 ({pdf_path}): {e}")
@@ -207,16 +223,22 @@ def extract_delinquency_from_pdf(
 
 
 def _search_delinquency_in_page(page) -> Optional[Dict[str, str]]:
-    """페이지의 테이블에서 연체율 행을 찾는다."""
+    """
+    페이지의 테이블에서 연체율 행을 찾는다.
+    우선순위: 금액기준 > 일반 > 건수기준 (건수기준은 금액기준/일반이 없을 때만)
+    """
     tables = page.extract_tables()
     if not tables:
         return None
+
+    # 모든 테이블에서 연체율 후보를 수집
+    candidates = []  # [(priority, result), ...]
 
     for table in tables:
         if not table:
             continue
 
-        # 헤더 행 감지: 첫 몇 행 중 기간 키워드가 있는 행을 헤더로 사용
+        # 헤더 행 감지
         header_row_idx = 0
         for h_idx in range(min(3, len(table))):
             row = table[h_idx]
@@ -233,26 +255,32 @@ def _search_delinquency_in_page(page) -> Optional[Dict[str, str]]:
         for row_idx, row in enumerate(table):
             if not row or row_idx == header_row_idx:
                 continue
-            # 셀 텍스트에서 연체율 키워드 탐색
             for col_idx, cell in enumerate(row):
                 if not cell:
                     continue
-                if _is_delinquency_cell(cell):
-                    result = _extract_values_from_row(table, row_idx, row, col_idx, header_row)
-                    if result:
-                        return result
+                cell_type = _classify_delinquency_cell(cell)
+                if cell_type is None:
+                    continue
 
-    return None
+                result = _extract_values_from_row(table, row_idx, row, col_idx, header_row)
+                if result:
+                    # 우선순위: amount=0 (최우선), generic=1, count=2 (최후순위)
+                    priority = {"amount": 0, "generic": 1, "count": 2}[cell_type]
+                    candidates.append((priority, result))
+
+    if not candidates:
+        return None
+
+    # 최우선순위 결과 반환
+    candidates.sort(key=lambda x: x[0])
+    return candidates[0][1]
 
 
 def _extract_values_from_row(
     table: list, row_idx: int, row: list, label_col: int,
     header_row: list = None
 ) -> Optional[Dict[str, str]]:
-    """
-    연체율이 발견된 행에서 수치 값을 추출한다.
-    """
-    # 같은 행에서 숫자 값들 수집
+    """연체율이 발견된 행에서 수치 값을 추출한다."""
     numbers = []
     for col_idx, cell in enumerate(row):
         if col_idx == label_col:
@@ -263,7 +291,6 @@ def _extract_values_from_row(
                 numbers.append((col_idx, val))
 
     if not numbers:
-        # 아래 행에 값이 있는 경우 (병합 셀)
         if row_idx + 1 < len(table):
             next_row = table[row_idx + 1]
             if next_row:
@@ -276,7 +303,6 @@ def _extract_values_from_row(
     if not numbers:
         return None
 
-    # 헤더 행에서 전기/당기 판별 시도
     if header_row is None:
         header_row = table[0] if table else []
     prior_cols, current_cols = _identify_period_columns(header_row)
@@ -289,8 +315,6 @@ def _extract_values_from_row(
             elif col_idx in prior_cols:
                 result["연체율_전기"] = str(val)
     elif len(numbers) >= 2:
-        # 헤더 판별 불가 시: 위치 기반 추정
-        # 통일경영공시 PDF는 보통 [공시기준(당기), 전년동기(전기)] 순서
         numbers.sort(key=lambda x: x[0])
         result["연체율_당기"] = str(numbers[0][1])
         result["연체율_전기"] = str(numbers[1][1])
@@ -321,55 +345,50 @@ def _identify_period_columns(header_row: list) -> Tuple[set, set]:
 
 
 def _search_delinquency_in_text(page) -> Optional[Dict[str, str]]:
-    """페이지 텍스트에서 연체율 값을 정규식으로 추출한다."""
+    """페이지 텍스트에서 연체율 값을 정규식으로 추출한다. 금액기준 우선."""
     text = page.extract_text()
     if not text:
         return None
 
     text_clean = text.replace(" ", "")
 
-    # 연체율 키워드 존재 확인
-    has_keyword = any(kw in text_clean for kw in _DELINQUENCY_KEYWORDS)
-    if not has_keyword:
-        return None
-
-    # 각 키워드에 대해 패턴 매칭 시도
-    for kw in _DELINQUENCY_KEYWORDS:
-        if kw not in text_clean:
+    # 1순위: 금액기준 명시적 패턴
+    for kw in ["연체대출채권비율(금액기준)", "연체대출금비율(금액기준)", "연체율(금액기준)"]:
+        kw_clean = kw.replace(" ", "")
+        if kw_clean not in text_clean:
             continue
-
-        # 패턴 1: 키워드 뒤에 두 개의 숫자
-        pattern_two = kw + r"[^\d]*?([\d]+(?:\.[\d]+)?)[%\s]+([\d]+(?:\.[\d]+)?)"
-        match = re.search(pattern_two, text_clean)
+        pattern = re.escape(kw_clean) + r"[^\d]*?([\d]+(?:\.[\d]+)?)[%\s]+([\d]+(?:\.[\d]+)?)"
+        match = re.search(pattern, text_clean)
         if match:
-            val1 = match.group(1)
-            val2 = match.group(2)
-            return {
-                "연체율_당기": val1,
-                "연체율_전기": val2,
-            }
-
-        # 패턴 2: 키워드 뒤에 한 개의 숫자
-        pattern_one = kw + r"[^\d]*?([\d]+(?:\.[\d]+)?)"
+            return {"연체율_당기": match.group(1), "연체율_전기": match.group(2)}
+        pattern_one = re.escape(kw_clean) + r"[^\d]*?([\d]+(?:\.[\d]+)?)"
         match = re.search(pattern_one, text_clean)
         if match:
             return {"연체율_당기": match.group(1)}
 
-    # 원본 텍스트(공백 포함)에서도 시도
-    for kw in _DELINQUENCY_KEYWORDS:
-        if kw not in text.replace(" ", ""):
+    # 2순위: 일반 연체율 키워드 (건수기준이 아닌 경우)
+    # "건수기준"이 근처에 없는 연체율 패턴 매칭
+    for kw in _GENERIC_DELINQUENCY_KEYWORDS:
+        if kw not in text_clean:
             continue
 
-        pattern_two = r"연체[^\d]*?비율[^\d]*?([\d]+(?:\.[\d]+)?)[%\s]+([\d]+(?:\.[\d]+)?)"
-        match = re.search(pattern_two, text)
-        if match:
-            return {
-                "연체율_당기": match.group(1),
-                "연체율_전기": match.group(2),
-            }
+        # 키워드 위치 찾기
+        pos = text_clean.find(kw)
+        if pos == -1:
+            continue
 
-        pattern_one = r"연체[^\d]*?비율[^\d]*?([\d]+(?:\.[\d]+)?)"
-        match = re.search(pattern_one, text)
+        # 주변에 "건수기준"이 있으면 건너뛰기
+        context = text_clean[max(0, pos - 15):pos + len(kw) + 15]
+        if any(ck in context for ck in _COUNT_BASED_KEYWORDS):
+            continue
+
+        pattern_two = re.escape(kw) + r"[^\d]*?([\d]+(?:\.[\d]+)?)[%\s]+([\d]+(?:\.[\d]+)?)"
+        match = re.search(pattern_two, text_clean[pos:])
+        if match:
+            return {"연체율_당기": match.group(1), "연체율_전기": match.group(2)}
+
+        pattern_one = re.escape(kw) + r"[^\d]*?([\d]+(?:\.[\d]+)?)"
+        match = re.search(pattern_one, text_clean[pos:])
         if match:
             return {"연체율_당기": match.group(1)}
 
@@ -381,7 +400,7 @@ def _parse_number(text: str) -> Optional[float]:
     if not text:
         return None
     cleaned = text.strip().replace(",", "").replace("%", "").replace(" ", "").replace("\n", "")
-    if cleaned in ("-", "–", "—", "", "N/A", "해당없음", "해당\n없음"):
+    if cleaned in ("-", "–", "—", "", "N/A", "해당없음"):
         return None
     try:
         val = float(cleaned)
@@ -404,37 +423,46 @@ def create_delinquency_excel(
 ) -> Optional[str]:
     """
     다운로드 폴더의 통일경영공시 PDF들에서 연체율을 추출하여 엑셀 파일을 생성한다.
-
-    Args:
-        download_path: PDF 파일들이 저장된 디렉터리
-        output_path: 출력 엑셀 경로 (None이면 download_path 내에 자동 생성)
-        api_key: Gemini API 키 (있으면 Gemini OCR 사용)
-        log_callback: 로그 콜백 함수
-
-    Returns:
-        생성된 엑셀 파일 경로 또는 None
     """
     def log(msg):
         if log_callback:
             log_callback(msg)
 
-    # 통일경영공시 PDF 파일 목록
     pdf_files = _find_disclosure_pdfs(download_path)
     if not pdf_files:
         log("연체율 추출 대상 통일경영공시 PDF 파일이 없습니다.")
         return None
 
-    if api_key and GEMINI_AVAILABLE:
-        log(f"연체율 추출 시작: {len(pdf_files)}개 통일경영공시 PDF (Gemini OCR 사용)")
-    elif PDFPLUMBER_AVAILABLE:
-        log(f"연체율 추출 시작: {len(pdf_files)}개 통일경영공시 PDF (pdfplumber 사용)")
-    else:
+    method = "Gemini OCR" if (api_key and GEMINI_AVAILABLE) else ("pdfplumber" if PDFPLUMBER_AVAILABLE else None)
+    if not method:
         log("pdfplumber와 Gemini 모두 사용 불가하여 연체율 추출을 건너뜁니다.")
         return None
 
+    log(f"연체율 추출 시작: {len(pdf_files)}개 PDF ({method})")
+    t0 = time.time()
+
+    # 병렬 추출 (Gemini 사용 시 최대 5개 동시, pdfplumber는 3개)
+    max_workers = 5 if (api_key and GEMINI_AVAILABLE) else 3
+    results_map = {}  # bank_name → data
+
+    def _extract_one(bank_name, pdf_path):
+        return bank_name, extract_delinquency_from_pdf(pdf_path, api_key=api_key, log_callback=log_callback)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_extract_one, bn, pp): bn for bn, pp in pdf_files}
+        for future in as_completed(futures):
+            try:
+                bank_name, data = future.result()
+                results_map[bank_name] = data
+            except Exception as e:
+                bn = futures[future]
+                results_map[bn] = None
+                log(f"  ❌ {bn}: 추출 오류 - {e}")
+
+    # 결과를 원래 순서대로 정렬
     rows = []
-    for bank_name, pdf_path in pdf_files:
-        data = extract_delinquency_from_pdf(pdf_path, api_key=api_key, log_callback=log_callback)
+    for bank_name, _ in pdf_files:
+        data = results_map.get(bank_name)
         if data:
             rows.append({
                 "No": len(rows) + 1,
@@ -442,7 +470,6 @@ def create_delinquency_excel(
                 "연체율_전기(%)": data.get("연체율_전기", ""),
                 "연체율_당기(%)": data.get("연체율_당기", ""),
             })
-            log(f"  {bank_name}: 전기 {data.get('연체율_전기', '-')}% / 당기 {data.get('연체율_당기', '-')}%")
         else:
             rows.append({
                 "No": len(rows) + 1,
@@ -450,13 +477,14 @@ def create_delinquency_excel(
                 "연체율_전기(%)": "",
                 "연체율_당기(%)": "",
             })
-            log(f"  {bank_name}: 연체율 추출 실패")
+
+    elapsed = time.time() - t0
+    elapsed_str = f"{int(elapsed // 60)}분 {int(elapsed % 60)}초" if elapsed >= 60 else f"{elapsed:.1f}초"
 
     if not rows:
         log("추출된 연체율 데이터가 없습니다.")
         return None
 
-    # 엑셀 생성
     df = pd.DataFrame(rows)
 
     if not output_path:
@@ -468,7 +496,6 @@ def create_delinquency_excel(
     try:
         with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
             df.to_excel(writer, sheet_name="연체율", index=False)
-
             ws = writer.sheets["연체율"]
             ws.column_dimensions["A"].width = 6
             ws.column_dimensions["B"].width = 20
@@ -476,7 +503,7 @@ def create_delinquency_excel(
             ws.column_dimensions["D"].width = 16
 
         extracted_count = sum(1 for r in rows if r["연체율_당기(%)"])
-        log(f"연체율 엑셀 생성 완료: {extracted_count}/{len(rows)}개 은행 추출 → {os.path.basename(output_path)}")
+        log(f"연체율 엑셀 생성 완료: {extracted_count}/{len(rows)}개 은행 ({elapsed_str})")
         return output_path
 
     except Exception as e:
@@ -491,9 +518,6 @@ def extract_all_delinquency(
 ) -> Dict[str, Dict[str, str]]:
     """
     다운로드 폴더의 모든 통일경영공시 PDF에서 연체율을 추출한다.
-
-    Returns:
-        {"은행명": {"연체율_전기": "1.98", "연체율_당기": "2.35"}, ...}
     """
     def log(msg):
         if log_callback:
@@ -504,24 +528,35 @@ def extract_all_delinquency(
         log("연체율 추출 대상 통일경영공시 PDF 파일이 없습니다.")
         return {}
 
-    if api_key and GEMINI_AVAILABLE:
-        log(f"연체율 추출 시작: {len(pdf_files)}개 통일경영공시 PDF (Gemini OCR)")
-    elif PDFPLUMBER_AVAILABLE:
-        log(f"연체율 추출 시작: {len(pdf_files)}개 통일경영공시 PDF (pdfplumber)")
-    else:
+    method = "Gemini OCR" if (api_key and GEMINI_AVAILABLE) else ("pdfplumber" if PDFPLUMBER_AVAILABLE else None)
+    if not method:
         log("pdfplumber와 Gemini 모두 사용 불가합니다.")
         return {}
 
-    result = {}
-    for bank_name, pdf_path in pdf_files:
-        data = extract_delinquency_from_pdf(pdf_path, api_key=api_key, log_callback=log_callback)
-        if data:
-            result[bank_name] = data
-            log(f"  {bank_name}: 전기 {data.get('연체율_전기', '-')}% / 당기 {data.get('연체율_당기', '-')}%")
-        else:
-            log(f"  {bank_name}: 연체율 추출 실패")
+    log(f"연체율 추출 시작: {len(pdf_files)}개 PDF ({method})")
+    t0 = time.time()
 
-    log(f"연체율 추출 완료: {len(result)}/{len(pdf_files)}개 성공")
+    # 병렬 추출
+    max_workers = 5 if (api_key and GEMINI_AVAILABLE) else 3
+    result = {}
+
+    def _extract_one(bank_name, pdf_path):
+        return bank_name, extract_delinquency_from_pdf(pdf_path, api_key=api_key, log_callback=log_callback)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_extract_one, bn, pp): bn for bn, pp in pdf_files}
+        for future in as_completed(futures):
+            try:
+                bank_name, data = future.result()
+                if data:
+                    result[bank_name] = data
+            except Exception as e:
+                bn = futures[future]
+                log(f"  ❌ {bn}: 추출 오류 - {e}")
+
+    elapsed = time.time() - t0
+    elapsed_str = f"{int(elapsed // 60)}분 {int(elapsed % 60)}초" if elapsed >= 60 else f"{elapsed:.1f}초"
+    log(f"연체율 추출 완료: {len(result)}/{len(pdf_files)}개 성공 ({elapsed_str})")
     return result
 
 
@@ -530,9 +565,7 @@ def patch_excel_with_delinquency(
     delinquency_data: Dict[str, Dict[str, str]],
     log_callback=None
 ) -> bool:
-    """
-    기존 분기총괄 엑셀의 연체율 컬럼에 PDF에서 추출한 연체율을 기입한다.
-    """
+    """기존 분기총괄 엑셀의 연체율 컬럼에 PDF에서 추출한 연체율을 기입한다."""
     if not delinquency_data or not excel_path or not os.path.exists(excel_path):
         return False
 
@@ -551,7 +584,6 @@ def patch_excel_with_delinquency(
 
         ws = wb["분기총괄"]
 
-        # 헤더 행에서 컬럼 인덱스 찾기
         header_row = [cell.value for cell in ws[1]]
         company_col = None
         prior_col = None
@@ -585,7 +617,6 @@ def patch_excel_with_delinquency(
                 continue
             bank_name = str(bank_name).strip()
 
-            # 은행명 매칭 (정확 일치 또는 부분 일치)
             matched_data = None
             if bank_name in delinquency_data:
                 matched_data = delinquency_data[bank_name]
@@ -594,7 +625,6 @@ def patch_excel_with_delinquency(
                     if pdf_bank in bank_name or bank_name in pdf_bank:
                         matched_data = data
                         break
-                    # "저축은행" 제거 후 비교
                     clean_pdf = pdf_bank.replace("저축은행", "").strip()
                     clean_bank = bank_name.replace("저축은행", "").strip()
                     if clean_pdf and clean_bank and (clean_pdf in clean_bank or clean_bank in clean_pdf):
@@ -631,7 +661,7 @@ def patch_excel_with_delinquency(
         wb.save(excel_path)
         wb.close()
 
-        log(f"연체율 기입 완료: {patched}개 은행 엑셀에 반영")
+        log(f"  연체율 기입 완료: {patched}개 은행 반영")
         return patched > 0
 
     except Exception as e:
@@ -640,10 +670,7 @@ def patch_excel_with_delinquency(
 
 
 def _find_disclosure_pdfs(download_path: str) -> List[Tuple[str, str]]:
-    """
-    다운로드 폴더에서 통일경영공시 PDF 파일을 찾아 (은행명, 경로) 리스트를 반환한다.
-    파일명 패턴: {은행명}_통일경영공시.pdf
-    """
+    """다운로드 폴더에서 통일경영공시 PDF 파일을 찾아 (은행명, 경로) 리스트를 반환한다."""
     results = []
     if not os.path.isdir(download_path):
         return results
@@ -658,7 +685,6 @@ def _find_disclosure_pdfs(download_path: str) -> List[Tuple[str, str]]:
         if not os.path.isfile(filepath):
             continue
 
-        # 은행명 추출: "{은행명}_통일경영공시.pdf" → 은행명
         bank_name = filename.split("_통일경영공시")[0]
         if bank_name:
             results.append((bank_name, filepath))
