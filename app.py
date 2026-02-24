@@ -586,15 +586,14 @@ def _auto_download_file(file_path, download_name):
     )
 
 
-def _sync_shared_to_session():
-    """공유 dict의 결과를 st.session_state에 동기화 (메인 스레드에서만 호출)."""
+def _sync_scraping_to_session():
+    """스크래핑 공유 dict → session_state 동기화 (메인 스레드에서만 호출)."""
     shared = st.session_state._scraping_shared
     st.session_state.scraping_running = shared.get('scraping_running', False)
     st.session_state.elapsed_time = shared.get('elapsed_time', 0)
     st.session_state.logs = shared.get('logs', [])
     st.session_state.scraping_progress = shared.get('scraping_progress', {})
 
-    # 완료 시에만 최종 결과 동기화
     phase = shared.get('scraping_progress', {}).get('phase', '')
     if phase in ('done', 'error'):
         st.session_state.results = shared.get('results', [])
@@ -607,18 +606,26 @@ def _sync_shared_to_session():
             st.session_state.validation_result = shared['validation_result']
         if shared.get('ai_table_generated'):
             st.session_state.ai_table_generated = True
-        # 공시 다운로드 결과 동기화
-        if shared.get('disclosure_results'):
-            st.session_state.disclosure_results = shared['disclosure_results']
-        if shared.get('disclosure_zip_path'):
-            st.session_state.disclosure_zip_path = shared['disclosure_zip_path']
+
+
+def _sync_disclosure_to_session():
+    """공시 다운로드 공유 dict → session_state 동기화 (메인 스레드에서만 호출)."""
+    shared = st.session_state._disclosure_shared
+    st.session_state.disclosure_running = shared.get('running', False)
+    st.session_state.disclosure_logs = shared.get('logs', [])
+
+    phase = shared.get('progress', {}).get('phase', '')
+    if phase in ('done', 'error'):
+        st.session_state.disclosure_results = shared.get('results', [])
+        if shared.get('zip_path'):
+            st.session_state.disclosure_zip_path = shared['zip_path']
         if shared.get('delinquency_excel_path'):
             st.session_state.delinquency_excel_path = shared['delinquency_excel_path']
 
 
 @st.fragment(run_every=2)
 def _render_scraping_progress():
-    """스크래핑 실시간 진행 표시 fragment — 완료 시 session_state 동기화만 수행"""
+    """스크래핑(1~4단계) 실시간 진행 표시 fragment"""
     shared = st.session_state.get('_scraping_shared', {})
     progress = shared.get('scraping_progress', {})
     phase = progress.get('phase', '')
@@ -635,10 +642,9 @@ def _render_scraping_progress():
     is_running = shared.get('scraping_running', False)
     if not is_running and phase in ('done', 'error'):
         if st.session_state.scraping_running:
-            _sync_shared_to_session()
-        # 완료 메시지만 표시 (결과 UI는 메인 페이지 담당)
+            _sync_scraping_to_session()
         if phase == 'done':
-            st.success("✅ 스크래핑 완료! 아래에서 결과를 확인하세요.")
+            st.success("✅ 스크래핑 완료!")
         else:
             st.error("❌ 스크래핑 중 오류가 발생했습니다.")
         return
@@ -657,15 +663,6 @@ def _render_scraping_progress():
     elif phase == 'ai_excel':
         phase_text = "🤖 GPT-5.2가 분기총괄 엑셀 생성 중..."
         pct = 1.0
-    elif phase == 'disclosure_download':
-        dl_current = progress.get('dl_current', 0)
-        dl_total = progress.get('dl_total', 1) or 1
-        dl_bank = progress.get('dl_bank', '')
-        phase_text = f"📥 공시파일 다운로드 중: **{dl_bank}** ({dl_current}/{dl_total})"
-        pct = 1.0
-    elif phase == 'extracting_delinquency':
-        phase_text = "📄 PDF에서 연체율 추출 및 엑셀 기입 중..."
-        pct = 1.0
     else:
         phase_text = "준비 중..."
 
@@ -678,13 +675,12 @@ def _render_scraping_progress():
 
     if logs:
         recent_logs = logs[-5:]
-        st.text_area("실시간 로그", value="\n".join(recent_logs), height=120, disabled=True, key="bg_log_area")
+        st.text_area("스크래핑 로그", value="\n".join(recent_logs), height=120, disabled=True, key="bg_log_area")
 
     if partial_results:
         success = sum(1 for r in partial_results if r.get('success'))
         fail = len(partial_results) - success
         total_banks = progress.get('total_banks', total)
-        # 전체 은행 수 기준 (재시도 중에는 partial_results가 전체 목록)
         all_total = len(partial_results) if len(partial_results) > total_banks else total_banks
         st.caption(f"현재까지: 성공 {success}개 / 실패 {fail}개 / 전체 {all_total}개")
 
@@ -707,13 +703,13 @@ def _render_disclosure_progress():
     is_running = shared.get('running', False)
     if not is_running and phase in ('done', 'error'):
         if st.session_state.disclosure_running:
-            st.session_state.disclosure_running = False
-            st.session_state.disclosure_results = shared.get('results', [])
-            st.session_state.disclosure_logs = shared.get('logs', [])
-            st.session_state.disclosure_zip_path = shared.get('zip_path')
-            st.session_state.delinquency_excel_path = shared.get('delinquency_excel_path')
+            _sync_disclosure_to_session()
         if phase == 'done':
-            st.success("✅ 공시파일 다운로드 완료! 아래에서 결과를 확인하세요.")
+            merge_done = shared.get('merge_done', False)
+            if merge_done:
+                st.success("✅ 공시 다운로드 + 연체율 추출 + merge 완료!")
+            else:
+                st.success("✅ 공시 다운로드 + 연체율 추출 완료!")
         else:
             st.error(f"❌ 오류 발생: {progress.get('error_msg', '')}")
         return
@@ -730,7 +726,10 @@ def _render_disclosure_progress():
         phase_text = "📦 파일 압축 중..."
         pct = 1.0
     elif phase == 'extracting_pdf':
-        phase_text = "📄 통일경영공시 PDF에서 연체율 추출 중..."
+        phase_text = "📄 PDF에서 연체율 추출 및 엑셀 생성 중..."
+        pct = 1.0
+    elif phase == 'merging':
+        phase_text = "🔗 분기총괄 엑셀에 연체율 merge 중..."
         pct = 1.0
     else:
         phase_text = "준비 중..."
@@ -744,7 +743,7 @@ def _render_disclosure_progress():
 
     if logs:
         recent_logs = logs[-8:]
-        st.text_area("실시간 로그", value="\n".join(recent_logs), height=150, disabled=True, key="dl_log_area")
+        st.text_area("다운로드 로그", value="\n".join(recent_logs), height=150, disabled=True, key="dl_log_area")
 
     partial_results = shared.get('results', [])
     if partial_results:
@@ -770,27 +769,48 @@ def _render_global_task_banner():
         elapsed = time.time() - start_time if start_time else 0
 
         if phase == 'scraping':
-            msg = f"🔄 스크래핑 진행 중: **{current_bank}** ({current_idx}/{total}) — ⏱️ {format_elapsed_time(elapsed)}"
+            msg = f"🔄 스크래핑: **{current_bank}** ({current_idx}/{total}) — ⏱️ {format_elapsed_time(elapsed)}"
         elif phase == 'retrying':
             retry_round = progress.get('retry_round', 1)
-            msg = f"🔄 실패 은행 재시도({retry_round}차): **{current_bank}** ({current_idx}/{total}) — ⏱️ {format_elapsed_time(elapsed)}"
+            msg = f"🔄 재시도({retry_round}차): **{current_bank}** ({current_idx}/{total}) — ⏱️ {format_elapsed_time(elapsed)}"
         elif phase == 'zipping':
-            msg = f"📦 파일 압축 중... — ⏱️ {format_elapsed_time(elapsed)}"
+            msg = f"📦 스크래핑 파일 압축 중... — ⏱️ {format_elapsed_time(elapsed)}"
         elif phase == 'ai_excel':
             msg = f"🤖 GPT-5.2 엑셀 생성 중... — ⏱️ {format_elapsed_time(elapsed)}"
-        elif phase == 'disclosure_download':
-            dl_current = progress.get('dl_current', 0)
-            dl_total_banks = progress.get('dl_total', 0)
-            dl_bank = progress.get('dl_bank', '')
-            msg = f"📥 공시파일 다운로드 중: **{dl_bank}** ({dl_current}/{dl_total_banks}) — ⏱️ {format_elapsed_time(elapsed)}"
-        elif phase == 'extracting_delinquency':
-            msg = f"📄 PDF 연체율 추출 및 엑셀 기입 중... — ⏱️ {format_elapsed_time(elapsed)}"
         else:
             msg = f"🔄 스크래핑 진행 중... — ⏱️ {format_elapsed_time(elapsed)}"
         st.info(msg)
     elif st.session_state.scraping_running:
-        # shared는 완료되었으나 session_state 미동기화 — 완료 메시지만 표시
-        st.success("✅ 스크래핑 완료! 아래에서 결과를 확인하세요.")
+        st.success("✅ 스크래핑 완료!")
+
+    # --- 다운로드 배너 ---
+    disclosure_shared = st.session_state.get('_disclosure_shared', {})
+    disclosure_running = disclosure_shared.get('running', False)
+
+    if disclosure_running:
+        dl_progress = disclosure_shared.get('progress', {})
+        dl_phase = dl_progress.get('phase', '')
+        dl_current = dl_progress.get('current_idx', 0)
+        dl_total = dl_progress.get('total_banks', 1) or 1
+        dl_bank = dl_progress.get('current_bank', '')
+        dl_start = dl_progress.get('start_time', 0)
+        dl_elapsed = time.time() - dl_start if dl_start else 0
+
+        if dl_phase in ('init', 'extracting'):
+            dl_msg = f"📥 공시 다운로드 준비 중... — ⏱️ {format_elapsed_time(dl_elapsed)}"
+        elif dl_phase == 'downloading':
+            dl_msg = f"📥 다운로드: **{dl_bank}** ({dl_current}/{dl_total}) — ⏱️ {format_elapsed_time(dl_elapsed)}"
+        elif dl_phase == 'zipping':
+            dl_msg = f"📦 공시파일 압축 중... — ⏱️ {format_elapsed_time(dl_elapsed)}"
+        elif dl_phase == 'extracting_pdf':
+            dl_msg = f"📄 PDF 연체율 추출 중... — ⏱️ {format_elapsed_time(dl_elapsed)}"
+        elif dl_phase == 'merging':
+            dl_msg = f"🔗 연체율 merge 중... — ⏱️ {format_elapsed_time(dl_elapsed)}"
+        else:
+            dl_msg = f"📥 공시 다운로드 진행 중... — ⏱️ {format_elapsed_time(dl_elapsed)}"
+        st.info(dl_msg)
+    elif st.session_state.get('disclosure_running', False):
+        st.success("✅ 공시 다운로드 완료!")
 
 
 def init_session_state():
@@ -1358,8 +1378,8 @@ def main():
 
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
-            start_disabled = not selected_banks or st.session_state.scraping_running
-            if st.button("🚀 스크래핑 시작", type="primary", width="stretch", disabled=start_disabled):
+            start_disabled = not selected_banks or st.session_state.scraping_running or st.session_state.get('disclosure_running', False)
+            if st.button("🚀 스크래핑 + 다운로드 동시 시작", type="primary", width="stretch", disabled=start_disabled):
                 if not selected_banks:
                     st.error("스크래핑할 은행을 선택하세요.")
                 else:
@@ -1376,14 +1396,29 @@ def main():
                     )
                     st.rerun()
 
-        # ========== 실시간 진행 상태 ==========
-        # fragment는 진행 중이거나 완료 직후에만 표시
-        shared = st.session_state.get('_scraping_shared', {})
-        shared_phase = shared.get('scraping_progress', {}).get('phase', '')
-        shared_running = shared.get('scraping_running', False)
+        # ========== 실시간 진행 상태 (병렬 표시) ==========
+        scraping_shared = st.session_state.get('_scraping_shared', {})
+        scraping_active = st.session_state.scraping_running or scraping_shared.get('scraping_running', False)
 
-        if st.session_state.scraping_running or shared_running:
-            _render_scraping_progress()
+        disclosure_shared = st.session_state.get('_disclosure_shared', {})
+        disclosure_active = st.session_state.get('disclosure_running', False) or disclosure_shared.get('running', False)
+
+        if scraping_active or disclosure_active:
+            if scraping_active and disclosure_active:
+                # 양쪽 모두 활성: 나란히 표시
+                prog_col1, prog_col2 = st.columns(2)
+                with prog_col1:
+                    st.markdown("##### 📊 스크래핑 진행")
+                    _render_scraping_progress()
+                with prog_col2:
+                    st.markdown("##### 📥 공시 다운로드 진행")
+                    _render_disclosure_progress()
+            elif scraping_active:
+                st.markdown("##### 📊 스크래핑 진행")
+                _render_scraping_progress()
+            else:
+                st.markdown("##### 📥 공시 다운로드 진행")
+                _render_disclosure_progress()
 
         st.divider()
 
@@ -1391,14 +1426,14 @@ def main():
         st.markdown('<div class="section-title"><span class="material-symbols-outlined" style="font-size:20px;color:#eca413;">analytics</span> 스크래핑 결과 <span class="live-badge">Live</span></div>', unsafe_allow_html=True)
 
         # 결과 소스: session_state (이전 rerun) 또는 shared dict (fragment 동기화 후)
-        results = st.session_state.results or shared.get('results', [])
-        bank_dates = st.session_state.bank_dates or shared.get('bank_dates', {})
+        results = st.session_state.results or scraping_shared.get('results', [])
+        bank_dates = st.session_state.bank_dates or scraping_shared.get('bank_dates', {})
         elapsed_time = st.session_state.elapsed_time or (
-            time.time() - shared.get('scraping_progress', {}).get('start_time', 0)
-            if shared.get('scraping_progress', {}).get('start_time') else 0
+            time.time() - scraping_shared.get('scraping_progress', {}).get('start_time', 0)
+            if scraping_shared.get('scraping_progress', {}).get('start_time') else 0
         )
-        zip_path = st.session_state.get('zip_path') or shared.get('zip_path')
-        summary_excel_path = st.session_state.get('summary_excel_path') or shared.get('summary_excel_path')
+        zip_path = st.session_state.get('zip_path') or scraping_shared.get('zip_path')
+        summary_excel_path = st.session_state.get('summary_excel_path') or scraping_shared.get('summary_excel_path')
 
         if results:
             success_count = sum(1 for r in results if r.get('success'))
@@ -1518,9 +1553,9 @@ def main():
                     )
 
             # ========== 공시파일 다운로드 결과 ==========
-            dl_results = st.session_state.disclosure_results or shared.get('disclosure_results', [])
-            dl_zip_path = st.session_state.disclosure_zip_path or shared.get('disclosure_zip_path')
-            delinquency_path = st.session_state.delinquency_excel_path or shared.get('delinquency_excel_path')
+            dl_results = st.session_state.disclosure_results or disclosure_shared.get('results', [])
+            dl_zip_path = st.session_state.disclosure_zip_path or disclosure_shared.get('zip_path')
+            delinquency_path = st.session_state.delinquency_excel_path or disclosure_shared.get('delinquency_excel_path')
 
             if dl_results:
                 st.write("")
@@ -1816,125 +1851,6 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
             except Exception as e:
                 logger.log_message(f"AI 엑셀 생성 오류: {str(e)}")
 
-        # ========== 통일경영공시 다운로드 + 연체율 추출 ==========
-        if DOWNLOADER_AVAILABLE:
-            progress['phase'] = 'disclosure_download'
-            logger.log_message("\n" + "=" * 40)
-            logger.log_message("통일경영공시/감사보고서 파일 다운로드 시작")
-            logger.log_message("=" * 40)
-            shared['logs'] = logger.messages.copy()
-
-            try:
-                disclosure_path = os.path.join(
-                    save_path if save_path else tempfile.gettempdir(),
-                    "공시파일"
-                )
-                os.makedirs(disclosure_path, exist_ok=True)
-
-                downloader = DisclosureDownloader(
-                    download_path=disclosure_path,
-                    log_callback=lambda msg: (
-                        logger.log_message(msg),
-                        shared.update({'logs': logger.messages.copy()})
-                    ),
-                    headless=True
-                )
-
-                # 은행 목록 추출
-                bank_list = downloader.start_and_extract_banks()
-
-                if bank_list:
-                    dl_total = len(bank_list)
-                    progress['dl_total'] = dl_total
-                    logger.log_message(f"{dl_total}개 은행 공시파일 다운로드 시작")
-                    shared['logs'] = logger.messages.copy()
-
-                    def dl_progress_cb(current, total_count, bank_name):
-                        progress['dl_current'] = current + 1
-                        progress['dl_bank'] = bank_name
-                        shared['logs'] = logger.messages.copy()
-
-                    total_dl = downloader.download_all(bank_list, dl_progress_cb)
-                    downloader.create_report()
-
-                    dl_results = list(downloader.results) if hasattr(downloader, 'results') else []
-                    dl_success = len([r for r in dl_results if r.get('상태') in ['완료', '부분완료']])
-                    logger.log_message(f"공시파일 다운로드 완료: 성공 {dl_success}/{dl_total}, 파일 {total_dl}개")
-                    shared['disclosure_results'] = dl_results
-                    shared['disclosure_download_path'] = disclosure_path
-
-                    # 공시파일 ZIP 압축
-                    downloaded_files = [
-                        os.path.join(disclosure_path, f)
-                        for f in os.listdir(disclosure_path)
-                        if not f.endswith(('.json', '.tmp', '.crdownload'))
-                    ]
-                    if downloaded_files:
-                        dl_zip_path = os.path.join(
-                            disclosure_path,
-                            f"저축은행_공시파일_{datetime.now().strftime('%Y%m%d')}.zip"
-                        )
-                        files_added = 0
-                        with zipfile.ZipFile(dl_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                            for fpath in downloaded_files:
-                                if os.path.isfile(fpath) and not fpath.endswith('.zip'):
-                                    zipf.write(fpath, os.path.basename(fpath))
-                                    files_added += 1
-                        if files_added > 0 and os.path.getsize(dl_zip_path) > 0:
-                            shared['disclosure_zip_path'] = dl_zip_path
-                            logger.log_message(f"공시파일 ZIP 생성 완료: {files_added}개 파일")
-
-                    # PDF에서 연체율 추출
-                    if PDF_EXTRACTOR_AVAILABLE:
-                        progress['phase'] = 'extracting_delinquency'
-                        logger.log_message("통일경영공시 PDF에서 연체율 추출 중...")
-                        shared['logs'] = logger.messages.copy()
-
-                        delinquency_data = extract_all_delinquency(
-                            disclosure_path,
-                            log_callback=lambda msg: (
-                                logger.log_message(msg),
-                                shared.update({'logs': logger.messages.copy()})
-                            )
-                        )
-
-                        if delinquency_data:
-                            shared['delinquency_data'] = delinquency_data
-
-                            # 기존 분기총괄 엑셀에 연체율 기입
-                            summary_path = shared.get('summary_excel_path')
-                            if summary_path and os.path.exists(summary_path):
-                                logger.log_message("분기총괄 엑셀에 연체율 기입 중...")
-                                shared['logs'] = logger.messages.copy()
-                                patch_excel_with_delinquency(
-                                    summary_path,
-                                    delinquency_data,
-                                    log_callback=lambda msg: (
-                                        logger.log_message(msg),
-                                        shared.update({'logs': logger.messages.copy()})
-                                    )
-                                )
-
-                            # 연체율 별도 엑셀도 생성
-                            delinquency_excel = create_delinquency_excel(
-                                disclosure_path,
-                                log_callback=lambda msg: (
-                                    logger.log_message(msg),
-                                    shared.update({'logs': logger.messages.copy()})
-                                )
-                            )
-                            if delinquency_excel:
-                                shared['delinquency_excel_path'] = delinquency_excel
-
-                    downloader.cleanup()
-                else:
-                    logger.log_message("공시파일 은행 목록 추출 실패 — 공시 다운로드를 건너뜁니다.")
-
-            except Exception as e:
-                logger.log_message(f"공시파일 다운로드/연체율 추출 오류: {str(e)}")
-
-            shared['logs'] = logger.messages.copy()
-
         # 완료
         shared['logs'] = logger.messages.copy()
         progress['phase'] = 'done'
@@ -1948,7 +1864,8 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
 
 
 def start_scraping(selected_banks, scrape_type, auto_zip, download_filename, use_chatgpt=False, api_key=None, save_path=None):
-    """스크래핑을 백그라운드 스레드로 시작"""
+    """스크래핑 + 공시 다운로드를 병렬 백그라운드 스레드로 동시 시작"""
+    # --- 세션 상태 초기화 ---
     st.session_state.scraping_running = True
     st.session_state.results = []
     st.session_state.logs = []
@@ -1956,13 +1873,20 @@ def start_scraping(selected_banks, scrape_type, auto_zip, download_filename, use
     st.session_state.summary_excel_path = None
     st.session_state.validation_result = None
     st.session_state.elapsed_time = 0
+    st.session_state.disclosure_running = True
     st.session_state.disclosure_results = []
+    st.session_state.disclosure_logs = []
     st.session_state.disclosure_zip_path = None
     st.session_state.delinquency_excel_path = None
+    st.session_state._auto_downloaded = False
+    st.session_state._disclosure_auto_downloaded = False
     st.session_state.pop('_scraping_zip_bytes', None)
+    st.session_state.pop('_disclosure_zip_bytes', None)
 
-    # 스레드와 공유할 plain dict 생성
-    shared = {
+    now = time.time()
+
+    # --- Thread A: 스크래핑 (1~4단계) ---
+    scraping_shared = {
         'scraping_running': True,
         'results': [],
         'logs': [],
@@ -1977,60 +1901,70 @@ def start_scraping(selected_banks, scrape_type, auto_zip, download_filename, use
             'current_idx': 0,
             'total_banks': len(selected_banks),
             'phase': 'scraping',
-            'start_time': time.time(),
+            'start_time': now,
             'partial_results': [],
         },
     }
-    st.session_state._scraping_shared = shared
-    st.session_state.scraping_progress = shared['scraping_progress']
+    st.session_state._scraping_shared = scraping_shared
+    st.session_state.scraping_progress = scraping_shared['scraping_progress']
 
-    thread = threading.Thread(
+    scraping_thread = threading.Thread(
         target=_scraping_worker,
-        args=(shared, selected_banks, scrape_type, auto_zip, download_filename),
+        args=(scraping_shared, selected_banks, scrape_type, auto_zip, download_filename),
         kwargs={'use_chatgpt': use_chatgpt, 'api_key': api_key, 'save_path': save_path},
         daemon=True
     )
-    st.session_state._scraping_thread = thread
-    thread.start()
+    st.session_state._scraping_thread = scraping_thread
 
+    # --- Thread B: 공시 다운로드 + 연체율 추출 (5~7단계) ---
+    if DOWNLOADER_AVAILABLE:
+        disclosure_save = st.session_state.get('disclosure_save_path', '') or save_path
+        disclosure_shared = {
+            'running': True,
+            'progress': {
+                'phase': 'init',
+                'current_idx': 0,
+                'total_banks': 0,
+                'current_bank': '',
+                'start_time': now,
+                'error_msg': '',
+            },
+            'logs': [],
+            'results': [],
+            'zip_path': None,
+            'delinquency_excel_path': None,
+            'delinquency_data': None,
+            # Thread B가 Thread A의 summary_excel_path를 참조하기 위한 교차 참조
+            '_scraping_shared_ref': scraping_shared,
+        }
+        st.session_state._disclosure_shared = disclosure_shared
 
-def _start_disclosure_download(save_path=None):
-    """공시파일 다운로드를 백그라운드 스레드로 시작"""
-    shared = {
-        'running': True,
-        'progress': {
-            'phase': 'init',
-            'current_idx': 0,
-            'total_banks': 0,
-            'current_bank': '',
-            'start_time': time.time(),
-            'error_msg': '',
-        },
-        'logs': [],
-        'results': [],
-        'zip_path': None,
-    }
-    st.session_state._disclosure_shared = shared
-    st.session_state.disclosure_running = True
-    st.session_state.disclosure_results = []
-    st.session_state.disclosure_logs = []
-    st.session_state.disclosure_zip_path = None
-    st.session_state.delinquency_excel_path = None
-    st.session_state._disclosure_auto_downloaded = False
-    st.session_state.pop('_disclosure_zip_bytes', None)
+        disclosure_thread = threading.Thread(
+            target=_disclosure_worker,
+            args=(disclosure_shared, disclosure_save),
+            daemon=True
+        )
+        st.session_state._disclosure_thread = disclosure_thread
+    else:
+        st.session_state.disclosure_running = False
+        disclosure_thread = None
 
-    thread = threading.Thread(
-        target=_disclosure_worker,
-        args=(shared, save_path),
-        daemon=True
-    )
-    st.session_state._disclosure_thread = thread
-    thread.start()
+    # 두 스레드 동시 시작
+    scraping_thread.start()
+    if disclosure_thread:
+        disclosure_thread.start()
+
 
 
 def _disclosure_worker(shared, save_path=None):
-    """백그라운드 스레드에서 실행되는 공시파일 다운로드 워커"""
+    """백그라운드 스레드에서 실행되는 공시파일 다운로드 워커 (5~7단계).
+
+    5. 공시파일 다운로드
+    6. PDF 연체율 추출 + 연체율 엑셀 생성
+    7. 스크래핑 쪽 분기총괄 엑셀이 준비되면 연체율 merge
+    """
     progress = shared['progress']
+    scraping_ref = shared.get('_scraping_shared_ref')  # Thread A 공유 dict 참조
 
     try:
         if save_path:
@@ -2051,7 +1985,7 @@ def _disclosure_worker(shared, save_path=None):
             headless=True
         )
 
-        # 은행 목록 추출
+        # 5-1. 은행 목록 추출
         progress['phase'] = 'extracting'
         log_callback("웹사이트 접속 및 은행 목록 추출 중...")
         bank_list = downloader.start_and_extract_banks()
@@ -2068,19 +2002,18 @@ def _disclosure_worker(shared, save_path=None):
         progress['phase'] = 'downloading'
         log_callback(f"{total}개 은행 공시파일 다운로드 시작")
 
-        # 다운로드 실행
+        # 5-2. 다운로드 실행
         def progress_callback(current, total_count, bank_name):
             progress['current_idx'] = current + 1
             progress['current_bank'] = bank_name
             shared['results'] = list(downloader.results) if hasattr(downloader, 'results') else []
-            log_callback(f"[{current + 1}/{total_count}] {bank_name} 처리 중")
 
         total_downloaded = downloader.download_all(bank_list, progress_callback)
 
         # 보고서 생성
         downloader.create_report()
 
-        # 다운로드된 파일 ZIP 압축
+        # 5-3. 다운로드된 파일 ZIP 압축
         progress['phase'] = 'zipping'
         log_callback("파일 압축 중...")
 
@@ -2113,13 +2046,21 @@ def _disclosure_worker(shared, save_path=None):
         # 결과 저장
         shared['results'] = list(downloader.results) if hasattr(downloader, 'results') else []
         success = len([r for r in shared['results'] if r.get('상태') in ['완료', '부분완료']])
-        log_callback(f"완료! 성공: {success}/{total}, 총 {total_downloaded}개 파일 다운로드")
+        log_callback(f"다운로드 완료! 성공: {success}/{total}, 총 {total_downloaded}개 파일")
 
-        # 통일경영공시 PDF에서 연체율 추출 → 별도 엑셀 생성
+        # 6. 통일경영공시 PDF에서 연체율 추출 + 연체율 엑셀 생성
+        delinquency_data = None
         if PDF_EXTRACTOR_AVAILABLE:
             progress['phase'] = 'extracting_pdf'
             log_callback("통일경영공시 PDF에서 연체율 추출 중...")
             try:
+                delinquency_data = extract_all_delinquency(
+                    download_path,
+                    log_callback=log_callback
+                )
+                if delinquency_data:
+                    shared['delinquency_data'] = delinquency_data
+
                 delinquency_path = create_delinquency_excel(
                     download_path=download_path,
                     log_callback=log_callback
@@ -2128,6 +2069,33 @@ def _disclosure_worker(shared, save_path=None):
                     shared['delinquency_excel_path'] = delinquency_path
             except Exception as e:
                 log_callback(f"연체율 추출 오류: {str(e)}")
+
+        # 7. Merge: 스크래핑 쪽의 분기총괄 엑셀에 연체율 기입
+        if delinquency_data and scraping_ref is not None:
+            progress['phase'] = 'merging'
+            log_callback("스크래핑 완료 대기 및 분기총괄 엑셀에 연체율 merge 중...")
+
+            # 스크래핑 쪽이 아직 실행 중이면 최대 300초(5분) 대기
+            waited = 0
+            while scraping_ref.get('scraping_running', False) and waited < 300:
+                time.sleep(3)
+                waited += 3
+
+            summary_path = scraping_ref.get('summary_excel_path')
+            if summary_path and os.path.exists(summary_path):
+                log_callback("분기총괄 엑셀에 연체율 기입 중...")
+                try:
+                    patch_excel_with_delinquency(
+                        summary_path,
+                        delinquency_data,
+                        log_callback=log_callback
+                    )
+                    shared['merge_done'] = True
+                    log_callback("연체율 merge 완료!")
+                except Exception as e:
+                    log_callback(f"연체율 merge 오류: {str(e)}")
+            else:
+                log_callback("분기총괄 엑셀이 생성되지 않아 merge를 건너뜁니다.")
 
         downloader.cleanup()
 
