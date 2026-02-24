@@ -86,7 +86,7 @@ def _get_column_letter(idx):
 class ChatGPTExcelGenerator:
     """ChatGPT API를 활용한 엑셀 생성기"""
 
-    def __init__(self, api_key=None):
+    def __init__(self, api_key=None, log_callback=None):
         if not OPENAI_AVAILABLE:
             raise ImportError("openai 패키지가 설치되어 있지 않습니다. pip install openai")
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
@@ -95,6 +95,7 @@ class ChatGPTExcelGenerator:
         self.client = OpenAI(api_key=self.api_key)
         self.config = ExcelGeneratorConfig()
         self._excel_cache = {}  # filepath → data 캐시
+        self._log = log_callback or (lambda msg: None)
 
     def _chat_completion(self, system_msg, user_msg):
         """ChatGPT API 공통 호출 헬퍼"""
@@ -152,12 +153,15 @@ class ChatGPTExcelGenerator:
         )
 
         try:
-            return self._chat_completion(
+            result = self._chat_completion(
                 "당신은 금융 데이터 분석 전문가입니다. 정확하게 데이터를 추출하고 JSON 형식으로만 응답합니다.",
                 prompt,
             )
+            filled = sum(1 for v in result.values() if v is not None)
+            self._log(f"  ✅ ChatGPT 추출 완료 ({filled}/16 항목)")
+            return result
         except Exception as e:
-            print(f"ChatGPT API 호출 오류: {e}")
+            self._log(f"  ❌ ChatGPT API 오류: {e}")
             return {}
 
     def analyze_and_format_data(self, scraped_results):
@@ -172,11 +176,16 @@ class ChatGPTExcelGenerator:
             bank_data = self._read_excel_data(filepath) if filepath else {}
             valid_items.append((idx, bank_name, filepath, date_info, bank_data))
 
+        total = len(valid_items)
+        self._log(f"[3-1] ChatGPT 재무 데이터 추출 시작 ({total}개 은행)")
+
         # 2. ChatGPT API 병렬 호출 (은행별 순차 → 최대 5개 동시)
         extracted_map = {}
+        completed_count = 0
 
         def _extract_single(item):
             idx, bank_name, filepath, date_info, bank_data = item
+            self._log(f"  [{idx}/{total}] {bank_name} — ChatGPT 호출 중...")
             extracted = self.extract_financial_data(bank_data) if bank_data else {}
             return (idx, bank_name, filepath, date_info, extracted)
 
@@ -186,13 +195,20 @@ class ChatGPTExcelGenerator:
                 try:
                     idx, bank_name, filepath, date_info, extracted = future.result()
                     extracted_map[idx] = (bank_name, filepath, date_info, extracted)
+                    completed_count += 1
                 except Exception as e:
                     item = futures[future]
                     extracted_map[item[0]] = (item[1], item[2], item[3], {})
+                    completed_count += 1
+                    self._log(f"  ❌ {item[1]} 추출 실패: {e}")
+
+        self._log(f"[3-1 완료] ChatGPT 추출 완료 ({completed_count}/{total}개)")
 
         # 3. DirectExcelGenerator fallback (누락 항목 보완)
+        self._log("[3-2] 누락 데이터 보완 (DirectExcelGenerator fallback)")
         formatted_data = []
         fallback_gen = None
+        fallback_count = 0
         scrape_keys = [
             "총자산_전기", "총자산_당기", "당기순이익_전기", "당기순이익_당기",
             "자기자본_전기", "자기자본_당기", "총여신_전기", "총여신_당기",
@@ -218,12 +234,22 @@ class ChatGPTExcelGenerator:
                         fallback_gen = DirectExcelGenerator()
                     fallback_data = fallback_gen._extract_from_file(filepath)
                     if fallback_data:
+                        patched = 0
                         for k, v in fallback_data.items():
                             if v is not None and (extracted.get(k) is None or extracted.get(k) == ""):
                                 extracted[k] = v
+                                patched += 1
+                        if patched > 0:
+                            self._log(f"  {bank_name}: fallback으로 {patched}개 항목 보완")
+                            fallback_count += 1
 
             row = self._build_row(idx, bank_name, date_info, extracted)
             formatted_data.append(row)
+
+        if fallback_count > 0:
+            self._log(f"[3-2 완료] {fallback_count}개 은행 fallback 보완 적용")
+        else:
+            self._log("[3-2 완료] fallback 불필요 — AI 추출 데이터 완전")
         return pd.DataFrame(formatted_data, columns=self.config.EXCEL_COLUMNS)
 
     @staticmethod
@@ -272,7 +298,7 @@ class ChatGPTExcelGenerator:
         t0 = time.time()
         df = self.analyze_and_format_data(scraped_results)
         t1 = time.time()
-        print(f"[타이밍] AI 데이터 추출: {t1 - t0:.1f}초")
+        self._log(f"[3-2 타이밍] AI 데이터 추출: {t1 - t0:.1f}초")
 
         if output_path is None:
             output_path = os.path.join(
@@ -281,20 +307,23 @@ class ChatGPTExcelGenerator:
             )
 
         # 먼저 데이터만으로 엑셀 저장 (Merge 등 외부에서 즉시 사용 가능)
+        self._log("[3-3] 엑셀 파일 저장 중...")
         _write_styled_excel(df, output_path, None)
         if early_path_callback:
             early_path_callback(output_path)
+        self._log("[3-3 완료] 엑셀 파일 저장 완료")
 
         validation_result = None
         if validate:
+            self._log("[3-4] ChatGPT 정합성 검증 시작...")
             t2 = time.time()
             validation_result = self.validate_excel_data(df, scraped_results)
             t3 = time.time()
-            print(f"[타이밍] 정합성 검증: {t3 - t2:.1f}초")
+            self._log(f"[3-4 완료] 정합성 검증 완료 ({t3 - t2:.1f}초)")
             # 검증 결과 시트를 포함하여 재저장
             _write_styled_excel(df, output_path, validation_result)
 
-        print(f"[타이밍] 엑셀 생성 전체: {time.time() - t0:.1f}초")
+        self._log(f"[3단계 타이밍] 엑셀 생성 전체: {time.time() - t0:.1f}초")
         return {"filepath": output_path, "validation": validation_result}
 
     def validate_excel_data(self, df, scraped_results):
@@ -392,6 +421,7 @@ class ChatGPTExcelGenerator:
         warnings = []
         details = {}
         source_summaries = []
+        self._log("  원본 데이터 로드 중...")
         for result in scraped_results:
             if not result.get('success'):
                 continue
@@ -405,8 +435,11 @@ class ChatGPTExcelGenerator:
                         "source_data": json.dumps(bank_data, ensure_ascii=False, default=str)[:2000]
                     })
         if not source_summaries:
+            self._log("  ⚠️ 원본 데이터 없음 — AI 검증 건너뜀")
             warnings.append("원본 데이터를 읽을 수 없어 AI 교차 검증을 건너뜁니다.")
             return {"errors": errors, "warnings": warnings, "details": details}
+
+        self._log(f"  ChatGPT 교차 검증 호출 중... ({len(source_summaries)}개 은행)")
 
         generated_data_str = df.to_string()
         prompt = (
@@ -437,8 +470,10 @@ class ChatGPTExcelGenerator:
             errors.extend(validation.get("errors", []))
             warnings.extend(validation.get("warnings", []))
             details = validation.get("bank_details", {})
+            self._log(f"  ✅ AI 검증 완료 (오류 {len(errors)}건, 경고 {len(warnings)}건)")
             return {"errors": errors, "warnings": warnings, "details": details, "summary": validation.get("summary", "")}
         except Exception as e:
+            self._log(f"  ❌ AI 검증 API 호출 실패: {e}")
             warnings.append(f"AI 검증 API 호출 실패: {str(e)}")
             return {"errors": errors, "warnings": warnings, "details": details}
 
@@ -784,10 +819,11 @@ def generate_excel_with_chatgpt(
     use_ai=True,
     validate=True,
     early_path_callback=None,
+    log_callback=None,
 ):
     """편의 함수: 스크래핑 결과로 엑셀 생성 및 정합성 검증 (ChatGPT API)"""
     if use_ai and OPENAI_AVAILABLE and api_key:
-        generator = ChatGPTExcelGenerator(api_key=api_key)
+        generator = ChatGPTExcelGenerator(api_key=api_key, log_callback=log_callback)
         return generator.generate_summary_excel(
             scraped_results, output_path, validate=validate,
             early_path_callback=early_path_callback,
