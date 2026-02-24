@@ -105,7 +105,7 @@ class ChatGPTExcelGenerator:
                 {"role": "user", "content": user_msg},
             ],
             temperature=self.config.TEMPERATURE,
-            max_tokens=self.config.MAX_TOKENS,
+            max_completion_tokens=self.config.MAX_TOKENS,
             response_format={"type": "json_object"},
         )
         result_text = response.choices[0].message.content.strip()
