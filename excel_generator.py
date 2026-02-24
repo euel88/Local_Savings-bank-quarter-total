@@ -1,6 +1,6 @@
 """
-Gemini 3.1 Pro Preview API를 활용한 저축은행 데이터 엑셀 생성 모듈
-버전: 4.0 - Gemini API 전환 + 전년동기/금분기 분리 컬럼 구조
+저축은행 데이터 엑셀 생성 모듈
+버전: 5.0 - 엑셀 작업은 ChatGPT API, PDF 추출은 Gemini API 분리 구조
 """
 
 import os
@@ -13,14 +13,18 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+
+# 하위 호환성: Gemini 여부는 pdf_delinquency_extractor에서만 사용
+try:
     from google import genai
     from google.genai import types
     GEMINI_AVAILABLE = True
 except ImportError:
     GEMINI_AVAILABLE = False
-
-# 하위 호환성 별칭
-OPENAI_AVAILABLE = GEMINI_AVAILABLE
 
 
 class ExcelGeneratorConfig:
@@ -62,9 +66,10 @@ class ExcelGeneratorConfig:
         "연체율_전년동기(전기)", "연체율_금분기(금기)",
     ]
 
-    MODEL = "gemini-3.1-pro-preview"
+    # ChatGPT API 설정 (엑셀 작업용)
+    OPENAI_MODEL = "gpt-4o"
     MAX_TOKENS = 4000
-    TEMPERATURE = 1.0  # Gemini 3 권장 기본값
+    TEMPERATURE = 0.2
 
 
 def _get_column_letter(idx):
@@ -78,18 +83,37 @@ def _get_column_letter(idx):
     return result
 
 
-class GeminiExcelGenerator:
-    """Gemini 3.1 Pro Preview API를 활용한 엑셀 생성기"""
+class ChatGPTExcelGenerator:
+    """ChatGPT API를 활용한 엑셀 생성기"""
 
     def __init__(self, api_key=None):
-        if not GEMINI_AVAILABLE:
-            raise ImportError("google-genai 패키지가 설치되어 있지 않습니다.")
-        self.api_key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        if not OPENAI_AVAILABLE:
+            raise ImportError("openai 패키지가 설치되어 있지 않습니다. pip install openai")
+        self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if not self.api_key:
-            raise ValueError("Gemini API 키가 필요합니다.")
-        self.client = genai.Client(api_key=self.api_key)
+            raise ValueError("OpenAI API 키가 필요합니다.")
+        self.client = OpenAI(api_key=self.api_key)
         self.config = ExcelGeneratorConfig()
         self._excel_cache = {}  # filepath → data 캐시
+
+    def _chat_completion(self, system_msg, user_msg):
+        """ChatGPT API 공통 호출 헬퍼"""
+        response = self.client.chat.completions.create(
+            model=self.config.OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            temperature=self.config.TEMPERATURE,
+            max_tokens=self.config.MAX_TOKENS,
+            response_format={"type": "json_object"},
+        )
+        result_text = response.choices[0].message.content.strip()
+        if "```json" in result_text:
+            result_text = result_text.split("```json")[1].split("```")[0].strip()
+        elif "```" in result_text:
+            result_text = result_text.split("```")[1].split("```")[0].strip()
+        return json.loads(result_text)
 
     def extract_financial_data(self, bank_data):
         if isinstance(bank_data, pd.DataFrame):
@@ -128,25 +152,12 @@ class GeminiExcelGenerator:
         )
 
         try:
-            response = self.client.models.generate_content(
-                model=self.config.MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction="당신은 금융 데이터 분석 전문가입니다. 정확하게 데이터를 추출하고 JSON 형식으로만 응답합니다.",
-                    temperature=self.config.TEMPERATURE,
-                    max_output_tokens=self.config.MAX_TOKENS,
-                    response_mime_type="application/json",
-                    thinking_config=types.ThinkingConfig(thinking_level="low"),
-                ),
+            return self._chat_completion(
+                "당신은 금융 데이터 분석 전문가입니다. 정확하게 데이터를 추출하고 JSON 형식으로만 응답합니다.",
+                prompt,
             )
-            result_text = response.text.strip()
-            if "```json" in result_text:
-                result_text = result_text.split("```json")[1].split("```")[0].strip()
-            elif "```" in result_text:
-                result_text = result_text.split("```")[1].split("```")[0].strip()
-            return json.loads(result_text)
         except Exception as e:
-            print(f"Gemini API 호출 오류: {e}")
+            print(f"ChatGPT API 호출 오류: {e}")
             return {}
 
     def analyze_and_format_data(self, scraped_results):
@@ -161,7 +172,7 @@ class GeminiExcelGenerator:
             bank_data = self._read_excel_data(filepath) if filepath else {}
             valid_items.append((idx, bank_name, filepath, date_info, bank_data))
 
-        # 2. Gemini API 병렬 호출 (은행별 순차 → 최대 5개 동시)
+        # 2. ChatGPT API 병렬 호출 (은행별 순차 → 최대 5개 동시)
         extracted_map = {}
 
         def _extract_single(item):
@@ -419,23 +430,10 @@ class GeminiExcelGenerator:
             '}'
         )
         try:
-            response = self.client.models.generate_content(
-                model=self.config.MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction="당신은 금융 데이터 품질 검증 전문가입니다. 반드시 JSON 형식으로만 응답하세요.",
-                    temperature=self.config.TEMPERATURE,
-                    max_output_tokens=self.config.MAX_TOKENS,
-                    response_mime_type="application/json",
-                    thinking_config=types.ThinkingConfig(thinking_level="low"),
-                ),
+            validation = self._chat_completion(
+                "당신은 금융 데이터 품질 검증 전문가입니다. 반드시 JSON 형식으로만 응답하세요.",
+                prompt,
             )
-            result_text = response.text.strip()
-            if "```json" in result_text:
-                result_text = result_text.split("```json")[1].split("```")[0].strip()
-            elif "```" in result_text:
-                result_text = result_text.split("```")[1].split("```")[0].strip()
-            validation = json.loads(result_text)
             errors.extend(validation.get("errors", []))
             warnings.extend(validation.get("warnings", []))
             details = validation.get("bank_details", {})
@@ -454,30 +452,24 @@ class GeminiExcelGenerator:
             f"각 행은 다음 컬럼을 포함해야 합니다: {', '.join(self.config.EXCEL_COLUMNS)}"
         )
         try:
-            response = self.client.models.generate_content(
-                model=self.config.MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction="당신은 금융 데이터 분석 전문가입니다.",
-                    temperature=self.config.TEMPERATURE,
-                    max_output_tokens=self.config.MAX_TOKENS,
-                    response_mime_type="application/json",
-                    thinking_config=types.ThinkingConfig(thinking_level="low"),
-                ),
+            result = self._chat_completion(
+                "당신은 금융 데이터 분석 전문가입니다.",
+                prompt,
             )
-            result_text = response.text.strip()
-            if "```json" in result_text:
-                result_text = result_text.split("```json")[1].split("```")[0].strip()
-            elif "```" in result_text:
-                result_text = result_text.split("```")[1].split("```")[0].strip()
-            return pd.DataFrame(json.loads(result_text))
+            # JSON 객체 안에 배열이 있을 수 있음
+            if isinstance(result, dict):
+                for v in result.values():
+                    if isinstance(v, list):
+                        return pd.DataFrame(v)
+                return pd.DataFrame([result])
+            return pd.DataFrame(result)
         except Exception as e:
             print(f"AI 처리 오류: {e}")
             return data
 
 
 # 하위 호환성 별칭
-ChatGPTExcelGenerator = GeminiExcelGenerator
+GeminiExcelGenerator = ChatGPTExcelGenerator
 
 
 def _write_styled_excel(df, output_path, validation_result=None):
@@ -527,7 +519,7 @@ def _write_styled_excel(df, output_path, validation_result=None):
 
 
 class DirectExcelGenerator:
-    """직접 데이터 입력을 통한 엑셀 생성기 (Gemini API 없이 사용 가능)"""
+    """직접 데이터 입력을 통한 엑셀 생성기 (AI API 없이 사용 가능)"""
 
     def __init__(self):
         self.config = ExcelGeneratorConfig()
@@ -785,7 +777,7 @@ class DirectExcelGenerator:
         return result
 
 
-def generate_excel_with_gemini(
+def generate_excel_with_chatgpt(
     scraped_results,
     api_key=None,
     output_path=None,
@@ -793,9 +785,9 @@ def generate_excel_with_gemini(
     validate=True,
     early_path_callback=None,
 ):
-    """편의 함수: 스크래핑 결과로 엑셀 생성 및 정합성 검증 (Gemini 3.1 Pro)"""
-    if use_ai and GEMINI_AVAILABLE and api_key:
-        generator = GeminiExcelGenerator(api_key=api_key)
+    """편의 함수: 스크래핑 결과로 엑셀 생성 및 정합성 검증 (ChatGPT API)"""
+    if use_ai and OPENAI_AVAILABLE and api_key:
+        generator = ChatGPTExcelGenerator(api_key=api_key)
         return generator.generate_summary_excel(
             scraped_results, output_path, validate=validate,
             early_path_callback=early_path_callback,
@@ -806,4 +798,4 @@ def generate_excel_with_gemini(
         return {"filepath": filepath, "validation": None}
 
 # 하위 호환성 별칭
-generate_excel_with_chatgpt = generate_excel_with_gemini
+generate_excel_with_gemini = generate_excel_with_chatgpt
