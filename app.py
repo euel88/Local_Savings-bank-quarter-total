@@ -1104,8 +1104,7 @@ def main():
     """, unsafe_allow_html=True)
     st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
-    # ========== Stat Cards ==========
-    # Calculate live stats
+    # ========== Stat Cards (항상 4개) ==========
     scraping_shared = st.session_state.get('_scraping_shared', {})
     disclosure_shared = st.session_state.get('_disclosure_shared', {})
     is_scraping = st.session_state.scraping_running
@@ -1115,58 +1114,38 @@ def main():
     data_collected = sum(1 for r in live_results if r.get('success', False)) if live_results else 0
     total_records = len(live_results) if live_results else 0
 
-    both_running = is_scraping and is_disclosure
+    stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
 
-    if both_running:
-        # 동시 실행: 4개 카드 (스크래핑 진행 / 스크래핑 수집 / 다운로드 진행 / 시스템)
-        stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
-    else:
-        stat_col1, stat_col2, stat_col3 = st.columns(3)
-        stat_col4 = None
-
-    # --- 카드 1: 스크래핑 진행 현황 ---
+    # --- 카드 1: 스크래핑 현황 ---
     with stat_col1:
         if is_scraping:
             scraping_progress = scraping_shared.get('scraping_progress', {})
-            crawl_badge = '<span class="stat-card-badge badge-green">스크래핑 중</span>'
-            crawl_value = f"{scraping_progress.get('current_idx', 0)} <span>/ {selected_count}</span>"
-        elif not both_running and is_disclosure:
-            dl_progress = disclosure_shared.get('progress', {})
-            dl_current = dl_progress.get('current_idx', 0)
-            dl_total = dl_progress.get('total_banks', 0)
-            crawl_badge = '<span class="stat-card-badge badge-green">다운로드 중</span>'
-            crawl_value = f"{dl_current} <span>/ {dl_total}</span>" if dl_total > 0 else "준비 중"
+            s_badge = '<span class="stat-card-badge badge-green">진행 중</span>'
+            s_value = f"{scraping_progress.get('current_idx', 0)} <span>/ {selected_count}</span>"
+        elif data_collected > 0:
+            s_badge = '<span class="stat-card-badge badge-green">완료</span>'
+            s_value = f"{data_collected} <span>건</span>"
         else:
-            crawl_badge = '<span class="stat-card-badge badge-amber">대기</span>'
-            crawl_value = f"{selected_count} <span>선택됨</span>"
+            s_badge = '<span class="stat-card-badge badge-amber">대기</span>'
+            s_value = f"{selected_count} <span>선택됨</span>"
         st.markdown(f"""
         <div class="stat-card">
             <div style="display:flex; justify-content:space-between; align-items:flex-start; position:relative; z-index:1;">
                 <div class="stat-card-icon">
                     <span class="material-symbols-outlined">monitoring</span>
                 </div>
-                {crawl_badge}
+                {s_badge}
             </div>
             <div style="margin-top:1rem; position:relative; z-index:1;">
-                <p class="stat-card-label">{'스크래핑 현황' if both_running or is_scraping else '진행 현황'}</p>
-                <p class="stat-card-value">{crawl_value}</p>
+                <p class="stat-card-label">스크래핑</p>
+                <p class="stat-card-value">{s_value}</p>
             </div>
         </div>
         """, unsafe_allow_html=True)
 
-    # --- 카드 2: 수집 데이터 (스크래핑) / 동시 실행 시에도 스크래핑 수집 ---
+    # --- 카드 2: 수집 데이터 ---
     with stat_col2:
-        if both_running:
-            # 동시 실행: 스크래핑 수집 데이터
-            if data_collected > 0 or total_records > 0:
-                display_data = f"{data_collected}"
-                today_count = f"{data_collected}/{total_records} 완료"
-                data_badge_class = "badge-green"
-            else:
-                display_data = "0"
-                today_count = "수집 중"
-                data_badge_class = "badge-amber"
-        elif data_collected > 0 or total_records > 0:
+        if data_collected > 0 or total_records > 0:
             display_data = f"{data_collected}"
             today_count = f"{data_collected}/{total_records} 완료"
             data_badge_class = "badge-green"
@@ -1189,84 +1168,75 @@ def main():
         </div>
         """, unsafe_allow_html=True)
 
-    # --- 카드 3: 동시 실행 시 다운로드 진행 / 단독 실행 시 시스템 상태 ---
+    # --- 카드 3: 다운로드 현황 ---
     with stat_col3:
-        if both_running:
-            # 동시 실행: 다운로드 진행 현황
-            dl_progress = disclosure_shared.get('progress', {})
-            dl_current = dl_progress.get('current_idx', 0)
-            dl_total = dl_progress.get('total_banks', 0)
-            dl_phase = dl_progress.get('phase', '')
-            if dl_phase in ('init', 'extracting'):
-                dl_badge = '<span class="stat-card-badge badge-amber">준비 중</span>'
-                dl_value = "초기화 중"
-            else:
-                dl_badge = '<span class="stat-card-badge badge-green">다운로드 중</span>'
-                dl_value = f"{dl_current} <span>/ {dl_total}</span>" if dl_total > 0 else "준비 중"
-            st.markdown(f"""
-            <div class="stat-card">
-                <div style="display:flex; justify-content:space-between; align-items:flex-start; position:relative; z-index:1;">
-                    <div class="stat-card-icon">
-                        <span class="material-symbols-outlined">download</span>
-                    </div>
-                    {dl_badge}
-                </div>
-                <div style="margin-top:1rem; position:relative; z-index:1;">
-                    <p class="stat-card-label">다운로드 현황</p>
-                    <p class="stat-card-value">{dl_value}</p>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            # 단독 실행 또는 대기: 시스템 상태
-            if is_scraping or is_disclosure:
-                health_badge = '<span class="stat-card-badge badge-green">실행 중</span>'
-                health_icon = "play_circle"
-                health_label = "실행 중"
-            elif data_collected > 0 and total_records > 0:
-                success_rate = round(data_collected / total_records * 100, 1)
-                health_badge = '<span class="stat-card-badge badge-green">완료</span>'
-                health_icon = "check_circle"
-                health_label = f"성공률 {success_rate}%"
-            else:
-                health_badge = '<span class="stat-card-badge badge-amber">대기</span>'
-                health_icon = "hourglass_empty"
-                health_label = "대기 중"
-            st.markdown(f"""
-            <div class="stat-card">
-                <div style="display:flex; justify-content:space-between; align-items:flex-start; position:relative; z-index:1;">
-                    <div class="stat-card-icon">
-                        <span class="material-symbols-outlined">{health_icon}</span>
-                    </div>
-                    {health_badge}
-                </div>
-                <div style="margin-top:1rem; position:relative; z-index:1;">
-                    <p class="stat-card-label">시스템 상태</p>
-                    <p class="stat-card-value">{health_label}</p>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+        dl_progress = disclosure_shared.get('progress', {})
+        dl_current = dl_progress.get('current_idx', 0)
+        dl_total = dl_progress.get('total_banks', 0)
+        dl_phase = dl_progress.get('phase', '')
 
-    # --- 카드 4: 동시 실행 시에만 표시되는 시스템 상태 ---
-    if stat_col4 is not None:
-        with stat_col4:
-            health_badge = '<span class="stat-card-badge badge-green">동시 실행 중</span>'
+        if is_disclosure:
+            if dl_phase in ('init', 'extracting'):
+                d_badge = '<span class="stat-card-badge badge-amber">준비 중</span>'
+                d_value = "초기화"
+            else:
+                d_badge = '<span class="stat-card-badge badge-green">진행 중</span>'
+                d_value = f"{dl_current} <span>/ {dl_total}</span>" if dl_total > 0 else "진행 중"
+        elif st.session_state.disclosure_results:
+            dl_done = len(st.session_state.disclosure_results)
+            d_badge = '<span class="stat-card-badge badge-green">완료</span>'
+            d_value = f"{dl_done} <span>건</span>"
+        else:
+            d_badge = '<span class="stat-card-badge badge-amber">대기</span>'
+            d_value = "대기 중"
+        st.markdown(f"""
+        <div class="stat-card">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; position:relative; z-index:1;">
+                <div class="stat-card-icon">
+                    <span class="material-symbols-outlined">download</span>
+                </div>
+                {d_badge}
+            </div>
+            <div style="margin-top:1rem; position:relative; z-index:1;">
+                <p class="stat-card-label">공시 다운로드</p>
+                <p class="stat-card-value">{d_value}</p>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # --- 카드 4: 시스템 상태 ---
+    with stat_col4:
+        if is_scraping and is_disclosure:
+            health_badge = '<span class="stat-card-badge badge-green">동시 실행</span>'
             health_icon = "play_circle"
             health_label = "2개 작업"
-            st.markdown(f"""
-            <div class="stat-card">
-                <div style="display:flex; justify-content:space-between; align-items:flex-start; position:relative; z-index:1;">
-                    <div class="stat-card-icon">
-                        <span class="material-symbols-outlined">{health_icon}</span>
-                    </div>
-                    {health_badge}
+        elif is_scraping or is_disclosure:
+            health_badge = '<span class="stat-card-badge badge-green">실행 중</span>'
+            health_icon = "play_circle"
+            health_label = "1개 작업"
+        elif data_collected > 0 and total_records > 0:
+            success_rate = round(data_collected / total_records * 100, 1)
+            health_badge = '<span class="stat-card-badge badge-green">완료</span>'
+            health_icon = "check_circle"
+            health_label = f"성공률 {success_rate}%"
+        else:
+            health_badge = '<span class="stat-card-badge badge-amber">대기</span>'
+            health_icon = "hourglass_empty"
+            health_label = "대기 중"
+        st.markdown(f"""
+        <div class="stat-card">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; position:relative; z-index:1;">
+                <div class="stat-card-icon">
+                    <span class="material-symbols-outlined">{health_icon}</span>
                 </div>
-                <div style="margin-top:1rem; position:relative; z-index:1;">
-                    <p class="stat-card-label">시스템 상태</p>
-                    <p class="stat-card-value">{health_label}</p>
-                </div>
+                {health_badge}
             </div>
-            """, unsafe_allow_html=True)
+            <div style="margin-top:1rem; position:relative; z-index:1;">
+                <p class="stat-card-label">시스템 상태</p>
+                <p class="stat-card-value">{health_label}</p>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
     st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
 
@@ -1358,7 +1328,7 @@ def main():
         st.divider()
 
         # ========== 실행 섹션 ==========
-        st.markdown('<div class="section-title"><span class="material-symbols-outlined" style="font-size:20px;color:#eca413;">rocket_launch</span> 스크래핑 실행</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title"><span class="material-symbols-outlined" style="font-size:20px;color:#eca413;">rocket_launch</span> 작업 실행</div>', unsafe_allow_html=True)
 
         col1, col2, col3, col4 = st.columns(4)
         with col1:
@@ -1396,28 +1366,99 @@ def main():
                     )
                     st.rerun()
 
-        # ========== 실시간 진행 상태 (병렬 표시) ==========
+        st.write("")
+
+        # ========== 작업 진행 현황 — 2카테고리 표 ==========
         scraping_shared = st.session_state.get('_scraping_shared', {})
         scraping_active = st.session_state.scraping_running or scraping_shared.get('scraping_running', False)
+        scraping_phase = scraping_shared.get('scraping_progress', {}).get('phase', '')
 
         disclosure_shared = st.session_state.get('_disclosure_shared', {})
         disclosure_active = st.session_state.get('disclosure_running', False) or disclosure_shared.get('running', False)
+        disclosure_phase = disclosure_shared.get('progress', {}).get('phase', '')
 
-        if scraping_active or disclosure_active:
-            if scraping_active and disclosure_active:
-                # 양쪽 모두 활성: 나란히 표시
-                prog_col1, prog_col2 = st.columns(2)
-                with prog_col1:
-                    st.markdown("##### 📊 스크래핑 진행")
-                    _render_scraping_progress()
-                with prog_col2:
-                    st.markdown("##### 📥 공시 다운로드 진행")
-                    _render_disclosure_progress()
-            elif scraping_active:
-                st.markdown("##### 📊 스크래핑 진행")
+        # 스크래핑 상태 텍스트
+        if scraping_active:
+            s_status_icon = "🟢"
+            s_phase_map = {
+                'scraping': '스크래핑 중', 'retrying': '재시도 중',
+                'zipping': '압축 중', 'ai_excel': 'AI 엑셀 생성 중',
+            }
+            s_status_text = s_phase_map.get(scraping_phase, '진행 중')
+        elif scraping_phase == 'done':
+            s_status_icon = "✅"
+            s_status_text = "완료"
+        elif scraping_phase == 'error':
+            s_status_icon = "❌"
+            s_status_text = "오류"
+        else:
+            s_status_icon = "⏸️"
+            s_status_text = "대기"
+
+        # 다운로드 상태 텍스트
+        if disclosure_active:
+            d_status_icon = "🟢"
+            d_phase_map = {
+                'init': '초기화 중', 'extracting': '은행 목록 추출',
+                'downloading': '다운로드 중', 'zipping': '압축 중',
+                'extracting_pdf': 'PDF 연체율 추출', 'merging': '연체율 merge',
+            }
+            d_status_text = d_phase_map.get(disclosure_phase, '진행 중')
+        elif disclosure_phase == 'done':
+            d_status_icon = "✅"
+            d_status_text = "완료"
+        elif disclosure_phase == 'error':
+            d_status_icon = "❌"
+            d_status_text = "오류"
+        else:
+            d_status_icon = "⏸️"
+            d_status_text = "대기"
+
+        # 스크래핑 단계 설명
+        s_steps = "스크래핑 → 재시도 → ZIP → AI 엑셀"
+        d_steps = "공시 다운로드 → ZIP → PDF 연체율 → Merge"
+
+        # 2카테고리 현황 표
+        st.markdown(f"""
+        <table style="width:100%; border-collapse:collapse; border:1px solid #333; border-radius:8px; overflow:hidden; margin-bottom:1rem;">
+            <thead>
+                <tr style="background:#1e1e2e;">
+                    <th style="padding:12px 16px; text-align:left; color:#ccc; font-size:13px; font-weight:600; border-bottom:1px solid #333; width:50%;">
+                        📊 스크래핑
+                    </th>
+                    <th style="padding:12px 16px; text-align:left; color:#ccc; font-size:13px; font-weight:600; border-bottom:1px solid #333; border-left:1px solid #333; width:50%;">
+                        📥 공시 다운로드
+                    </th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr style="background:#16161e;">
+                    <td style="padding:12px 16px; border-bottom:1px solid #2a2a3a; vertical-align:top;">
+                        <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+                            <span style="font-size:18px;">{s_status_icon}</span>
+                            <span style="font-size:15px; font-weight:600; color:#e0e0e0;">{s_status_text}</span>
+                        </div>
+                        <p style="color:#888; font-size:12px; margin:0;">{s_steps}</p>
+                    </td>
+                    <td style="padding:12px 16px; border-bottom:1px solid #2a2a3a; border-left:1px solid #333; vertical-align:top;">
+                        <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+                            <span style="font-size:18px;">{d_status_icon}</span>
+                            <span style="font-size:15px; font-weight:600; color:#e0e0e0;">{d_status_text}</span>
+                        </div>
+                        <p style="color:#888; font-size:12px; margin:0;">{d_steps}</p>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+        """, unsafe_allow_html=True)
+
+        # 각 카테고리별 실시간 진행 fragment
+        prog_col1, prog_col2 = st.columns(2)
+        with prog_col1:
+            if scraping_active or scraping_phase in ('done', 'error'):
                 _render_scraping_progress()
-            else:
-                st.markdown("##### 📥 공시 다운로드 진행")
+        with prog_col2:
+            if disclosure_active or disclosure_phase in ('done', 'error'):
                 _render_disclosure_progress()
 
         st.divider()
