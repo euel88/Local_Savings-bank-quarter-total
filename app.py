@@ -706,10 +706,13 @@ def _render_disclosure_progress():
             _sync_disclosure_to_session()
         if phase == 'done':
             merge_done = shared.get('merge_done', False)
+            has_delinquency = bool(shared.get('delinquency_data'))
             if merge_done:
                 st.success("✅ 공시 다운로드 + 연체율 추출 + merge 완료!")
-            else:
+            elif has_delinquency:
                 st.success("✅ 공시 다운로드 + 연체율 추출 완료!")
+            else:
+                st.success("✅ 공시 다운로드 완료 (연체율 추출 없음)")
         else:
             st.error(f"❌ 오류 발생: {progress.get('error_msg', '')}")
         return
