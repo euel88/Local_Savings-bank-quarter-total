@@ -1933,12 +1933,18 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
                     shared['summary_excel_path'] = path
                     shared['ai_table_generated'] = True
 
+                def _ai_log(msg):
+                    """AI 엑셀 생성 실시간 로그 콜백"""
+                    logger.log_message(msg)
+                    shared['logs'] = logger.messages.copy()
+
                 gen_result = generate_excel_with_chatgpt(
                     scraped_results=results,
                     api_key=api_key,
                     use_ai=True,
                     validate=True,
                     early_path_callback=_on_excel_ready,
+                    log_callback=_ai_log,
                 )
                 summary_excel_path = gen_result.get("filepath") if isinstance(gen_result, dict) else gen_result
                 validation = gen_result.get("validation") if isinstance(gen_result, dict) else None
