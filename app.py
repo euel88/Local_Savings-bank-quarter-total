@@ -1552,71 +1552,71 @@ def main():
                         type="primary"
                     )
 
-            # ========== 공시파일 다운로드 결과 ==========
-            dl_results = st.session_state.disclosure_results or disclosure_shared.get('results', [])
-            dl_zip_path = st.session_state.disclosure_zip_path or disclosure_shared.get('zip_path')
-            delinquency_path = st.session_state.delinquency_excel_path or disclosure_shared.get('delinquency_excel_path')
-
-            if dl_results:
-                st.write("")
-                st.markdown("#### 📥 공시파일 다운로드 결과")
-
-                dl_success = len([r for r in dl_results if r.get('상태') in ['완료', '부분완료']])
-                dl_failed = len([r for r in dl_results if r.get('상태') == '실패'])
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("전체", f"{len(dl_results)}개")
-                with col2:
-                    st.metric("성공", f"{dl_success}개")
-                with col3:
-                    st.metric("실패", f"{dl_failed}개")
-
-                with st.expander("공시파일 다운로드 상세", expanded=False):
-                    st.dataframe(pd.DataFrame(dl_results), width="stretch", hide_index=True)
-
-                if dl_zip_path and os.path.exists(dl_zip_path):
-                    zip_size = os.path.getsize(dl_zip_path)
-                    if zip_size > 0:
-                        col1, col2, col3 = st.columns([1, 2, 1])
-                        with col2:
-                            with open(dl_zip_path, 'rb') as f:
-                                dl_zip_bytes = f.read()
-                            st.download_button(
-                                label="📥 공시파일 ZIP 다운로드",
-                                data=dl_zip_bytes,
-                                file_name=f"저축은행_공시파일_{datetime.now().strftime('%Y%m%d')}.zip",
-                                mime="application/zip",
-                                width="stretch",
-                                type="secondary",
-                                key="btn_disclosure_zip"
-                            )
-
-            # ========== 연체율 엑셀 다운로드 ==========
-            if delinquency_path and os.path.exists(delinquency_path):
-                st.write("")
-                st.markdown("#### 📄 연체율 요약 엑셀")
-                try:
-                    dq_df = pd.read_excel(delinquency_path, sheet_name='연체율')
-                    st.dataframe(dq_df, width="stretch", hide_index=True)
-                except Exception:
-                    pass
-
-                col1, col2, col3 = st.columns([1, 2, 1])
-                with col2:
-                    with open(delinquency_path, 'rb') as f:
-                        dq_bytes = f.read()
-                    st.download_button(
-                        label="📄 연체율 엑셀 다운로드",
-                        data=dq_bytes,
-                        file_name=f"저축은행_연체율_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        width="stretch",
-                        type="secondary",
-                        key="btn_delinquency_excel"
-                    )
-
         else:
             st.info("아직 스크래핑 결과가 없습니다. 은행을 선택하고 스크래핑을 실행하세요.")
+
+        # ========== 공시파일 다운로드 결과 (스크래핑과 독립) ==========
+        dl_results = st.session_state.disclosure_results or disclosure_shared.get('results', [])
+        dl_zip_path = st.session_state.disclosure_zip_path or disclosure_shared.get('zip_path')
+        delinquency_path = st.session_state.delinquency_excel_path or disclosure_shared.get('delinquency_excel_path')
+
+        if dl_results:
+            st.divider()
+            st.markdown('<div class="section-title"><span class="material-symbols-outlined" style="font-size:20px;color:#eca413;">download</span> 공시파일 다운로드 결과 <span class="live-badge">Live</span></div>', unsafe_allow_html=True)
+
+            dl_success = len([r for r in dl_results if r.get('상태') in ['완료', '부분완료']])
+            dl_failed = len([r for r in dl_results if r.get('상태') == '실패'])
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("전체", f"{len(dl_results)}개")
+            with col2:
+                st.metric("성공", f"{dl_success}개")
+            with col3:
+                st.metric("실패", f"{dl_failed}개")
+
+            with st.expander("공시파일 다운로드 상세", expanded=False):
+                st.dataframe(pd.DataFrame(dl_results), width="stretch", hide_index=True)
+
+            if dl_zip_path and os.path.exists(dl_zip_path):
+                zip_size = os.path.getsize(dl_zip_path)
+                if zip_size > 0:
+                    col1, col2, col3 = st.columns([1, 2, 1])
+                    with col2:
+                        with open(dl_zip_path, 'rb') as f:
+                            dl_zip_bytes = f.read()
+                        st.download_button(
+                            label="📥 공시파일 ZIP 다운로드",
+                            data=dl_zip_bytes,
+                            file_name=f"저축은행_공시파일_{datetime.now().strftime('%Y%m%d')}.zip",
+                            mime="application/zip",
+                            width="stretch",
+                            type="secondary",
+                            key="btn_disclosure_zip"
+                        )
+
+        # ========== 연체율 엑셀 다운로드 (스크래핑과 독립) ==========
+        if delinquency_path and os.path.exists(delinquency_path):
+            st.write("")
+            st.markdown("#### 📄 연체율 요약 엑셀")
+            try:
+                dq_df = pd.read_excel(delinquency_path, sheet_name='연체율')
+                st.dataframe(dq_df, width="stretch", hide_index=True)
+            except Exception:
+                pass
+
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                with open(delinquency_path, 'rb') as f:
+                    dq_bytes = f.read()
+                st.download_button(
+                    label="📄 연체율 엑셀 다운로드",
+                    data=dq_bytes,
+                    file_name=f"저축은행_연체율_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    width="stretch",
+                    type="secondary",
+                    key="btn_delinquency_excel"
+                )
 
     # (탭 2 제거됨: 공시 다운로드는 스크래핑 워커에 통합)
 
