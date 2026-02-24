@@ -1,8 +1,8 @@
 """
-통일경영공시 PDF에서 은행별 연체율을 추출하여 엑셀로 정리하는 모듈.
-- Gemini OCR 기반 추출 (1차) — 금액기준 연체율만 추출
-- pdfplumber 기반 텍스트/테이블 추출 (fallback)
-- 연체율(%) 값만 추출
+통일경영공시 PDF에서 은행별 연체대출비율을 추출하여 엑셀로 정리하는 모듈.
+- 자산건전성 지표 항목 내 연체대출비율(금액기준)을 타겟으로 추출
+- Gemini OCR 기반 추출 (1차)
+- pdfplumber 기반 테이블/텍스트 추출 (fallback, 자산건전성 지표 페이지 우선)
 - 별도 엑셀 파일로 생성
 """
 
@@ -32,19 +32,28 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# 금액기준 연체율 우선 키워드 (건수기준 제외)
+# 자산건전성 지표 섹션 감지 키워드
+_ASSET_QUALITY_KEYWORDS = [
+    "자산건전성지표",
+    "자산건전성 지표",
+    "자산건전성",
+]
+
+# 금액기준 연체대출비율 우선 키워드
 _AMOUNT_BASED_KEYWORDS = [
+    "연체대출비율(금액기준)",
     "연체대출채권비율(금액기준)",
     "연체대출금비율(금액기준)",
     "연체율(금액기준)",
     "연체비율(금액기준)",
 ]
 
-# 일반 연체율 키워드 (건수기준 미포함 시 사용)
+# 일반 연체대출비율 키워드 (자산건전성 지표 내에서 탐색)
 _GENERIC_DELINQUENCY_KEYWORDS = [
-    "연체율",
+    "연체대출비율",
     "연체대출채권비율",
     "연체대출금비율",
+    "연체율",
     "연체비율",
 ]
 
@@ -104,10 +113,13 @@ def _extract_with_gemini(pdf_path: str, api_key: str, log_callback=None) -> Opti
             return None
 
         prompt = (
-            "이 통일경영공시 PDF에서 연체대출채권비율(연체율)을 찾아주세요.\n\n"
-            "중요: PDF에 '건수기준'과 '금액기준' 두 종류가 있을 수 있습니다.\n"
-            "반드시 **금액기준** 연체대출채권비율만 추출하세요.\n"
-            "건수기준은 절대 사용하지 마세요.\n\n"
+            "이 통일경영공시 PDF에서 '자산건전성 지표' 항목 내 '연체대출비율'을 찾아주세요.\n\n"
+            "중요 사항:\n"
+            "1. 반드시 '자산건전성 지표' 섹션에 있는 '연체대출비율'만 추출하세요.\n"
+            "2. PDF에 '건수기준'과 '금액기준' 두 종류가 있을 수 있습니다.\n"
+            "   반드시 **금액기준** 연체대출비율만 추출하세요. 건수기준은 절대 사용하지 마세요.\n"
+            "3. '연체대출비율', '연체대출채권비율', '연체율' 등 표현이 다를 수 있으나 "
+            "모두 같은 항목입니다.\n\n"
             "공시기준(당기) 값과 전년동기(전기) 값을 각각 추출해주세요.\n"
             "반드시 아래 JSON 형식으로만 응답하세요:\n"
             '{"연체율_당기": "숫자", "연체율_전기": "숫자"}\n'
@@ -116,7 +128,7 @@ def _extract_with_gemini(pdf_path: str, api_key: str, log_callback=None) -> Opti
         )
 
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-3.1-pro-preview",
             contents=[
                 types.Part.from_bytes(
                     data=pdf_bytes,
@@ -198,22 +210,47 @@ def extract_delinquency_from_pdf(
 
     try:
         with pdfplumber.open(pdf_path) as pdf:
-            # 2차: 테이블 추출 시도 (금액기준 우선)
+            # 자산건전성 지표 섹션이 있는 페이지를 우선 탐색
+            asset_quality_pages = []
+            other_pages = []
             for page_num, page in enumerate(pdf.pages):
+                text = page.extract_text() or ""
+                text_clean = text.replace(" ", "")
+                if any(kw.replace(" ", "") in text_clean for kw in _ASSET_QUALITY_KEYWORDS):
+                    asset_quality_pages.append((page_num, page))
+                else:
+                    other_pages.append((page_num, page))
+
+            # 2차: 자산건전성 지표 페이지 테이블에서 우선 탐색
+            for page_num, page in asset_quality_pages:
                 result = _search_delinquency_in_page(page)
                 if result:
-                    log(f"    [pdfplumber 테이블] 페이지 {page_num + 1}에서 연체율 발견")
+                    log(f"    [pdfplumber 테이블] 자산건전성 지표 페이지 {page_num + 1}에서 연체대출비율 발견")
                     return result
 
-            # 3차: 텍스트 기반 추출
-            for page_num, page in enumerate(pdf.pages):
+            # 2-1차: 자산건전성 페이지가 없으면 전체 페이지 테이블 탐색
+            for page_num, page in other_pages:
+                result = _search_delinquency_in_page(page)
+                if result:
+                    log(f"    [pdfplumber 테이블] 페이지 {page_num + 1}에서 연체대출비율 발견")
+                    return result
+
+            # 3차: 자산건전성 지표 페이지 텍스트 탐색
+            for page_num, page in asset_quality_pages:
                 result = _search_delinquency_in_text(page)
                 if result:
-                    log(f"    [pdfplumber 텍스트] 페이지 {page_num + 1}에서 연체율 발견")
+                    log(f"    [pdfplumber 텍스트] 자산건전성 지표 페이지 {page_num + 1}에서 연체대출비율 발견")
+                    return result
+
+            # 3-1차: 전체 페이지 텍스트 탐색
+            for page_num, page in other_pages:
+                result = _search_delinquency_in_text(page)
+                if result:
+                    log(f"    [pdfplumber 텍스트] 페이지 {page_num + 1}에서 연체대출비율 발견")
                     return result
 
             # 실패 시 디버그 정보
-            log(f"    [디버그] 총 {len(pdf.pages)}페이지 검색했으나 연체율 미발견")
+            log(f"    [디버그] 총 {len(pdf.pages)}페이지 검색했으나 연체대출비율 미발견 (자산건전성 지표 페이지: {len(asset_quality_pages)}개)")
 
     except Exception as e:
         logger.error(f"PDF 파싱 오류 ({pdf_path}): {e}")
@@ -353,7 +390,7 @@ def _search_delinquency_in_text(page) -> Optional[Dict[str, str]]:
     text_clean = text.replace(" ", "")
 
     # 1순위: 금액기준 명시적 패턴
-    for kw in ["연체대출채권비율(금액기준)", "연체대출금비율(금액기준)", "연체율(금액기준)"]:
+    for kw in ["연체대출비율(금액기준)", "연체대출채권비율(금액기준)", "연체대출금비율(금액기준)", "연체율(금액기준)"]:
         kw_clean = kw.replace(" ", "")
         if kw_clean not in text_clean:
             continue
@@ -419,10 +456,13 @@ def create_delinquency_excel(
     download_path: str,
     output_path: Optional[str] = None,
     api_key: str = None,
-    log_callback=None
+    log_callback=None,
+    existing_data: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> Optional[str]:
     """
     다운로드 폴더의 통일경영공시 PDF들에서 연체율을 추출하여 엑셀 파일을 생성한다.
+
+    existing_data가 주어지면 중복 추출 없이 해당 데이터로 엑셀만 생성한다.
     """
     def log(msg):
         if log_callback:
@@ -433,31 +473,36 @@ def create_delinquency_excel(
         log("연체율 추출 대상 통일경영공시 PDF 파일이 없습니다.")
         return None
 
-    method = "Gemini OCR" if (api_key and GEMINI_AVAILABLE) else ("pdfplumber" if PDFPLUMBER_AVAILABLE else None)
-    if not method:
-        log("pdfplumber와 Gemini 모두 사용 불가하여 연체율 추출을 건너뜁니다.")
-        return None
-
-    log(f"연체율 추출 시작: {len(pdf_files)}개 PDF ({method})")
     t0 = time.time()
 
-    # 병렬 추출 (Gemini 사용 시 최대 5개 동시, pdfplumber는 3개)
-    max_workers = 5 if (api_key and GEMINI_AVAILABLE) else 3
-    results_map = {}  # bank_name → data
+    # 이미 추출된 데이터가 있으면 재추출 생략
+    if existing_data:
+        log(f"연체율 엑셀 생성: 기추출 데이터 {len(existing_data)}건 사용")
+        results_map = {bn: existing_data.get(bn) for bn, _ in pdf_files}
+    else:
+        method = "Gemini OCR" if (api_key and GEMINI_AVAILABLE) else ("pdfplumber" if PDFPLUMBER_AVAILABLE else None)
+        if not method:
+            log("pdfplumber와 Gemini 모두 사용 불가하여 연체율 추출을 건너뜁니다.")
+            return None
 
-    def _extract_one(bank_name, pdf_path):
-        return bank_name, extract_delinquency_from_pdf(pdf_path, api_key=api_key, log_callback=log_callback)
+        log(f"연체율 추출 시작: {len(pdf_files)}개 PDF ({method})")
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(_extract_one, bn, pp): bn for bn, pp in pdf_files}
-        for future in as_completed(futures):
-            try:
-                bank_name, data = future.result()
-                results_map[bank_name] = data
-            except Exception as e:
-                bn = futures[future]
-                results_map[bn] = None
-                log(f"  ❌ {bn}: 추출 오류 - {e}")
+        max_workers = 5 if (api_key and GEMINI_AVAILABLE) else 3
+        results_map = {}
+
+        def _extract_one(bank_name, pdf_path):
+            return bank_name, extract_delinquency_from_pdf(pdf_path, api_key=api_key, log_callback=log_callback)
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_extract_one, bn, pp): bn for bn, pp in pdf_files}
+            for future in as_completed(futures):
+                try:
+                    bank_name, data = future.result()
+                    results_map[bank_name] = data
+                except Exception as e:
+                    bn = futures[future]
+                    results_map[bn] = None
+                    log(f"  ❌ {bn}: 추출 오류 - {e}")
 
     # 결과를 원래 순서대로 정렬
     rows = []
