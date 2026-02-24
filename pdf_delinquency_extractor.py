@@ -127,23 +127,38 @@ def _extract_with_gemini(pdf_path: str, api_key: str, log_callback=None) -> Opti
             "숫자는 퍼센트(%) 단위의 소수점 숫자만 넣으세요. (예: 2.35)"
         )
 
-        response = client.models.generate_content(
-            model="gemini-3.1-pro-preview",
-            contents=[
-                types.Part.from_bytes(
-                    data=pdf_bytes,
-                    mime_type="application/pdf"
-                ),
-                prompt
-            ],
-            config=types.GenerateContentConfig(
-                temperature=0.1,
-                max_output_tokens=256,
-                response_mime_type="application/json",
+        contents = [
+            types.Part.from_bytes(
+                data=pdf_bytes,
+                mime_type="application/pdf"
             ),
+            prompt
+        ]
+        config = types.GenerateContentConfig(
+            temperature=0.1,
+            max_output_tokens=256,
+            response_mime_type="application/json",
         )
 
-        result_text = response.text.strip()
+        # 빈 응답 시 1회 재시도 (모델이 간헐적으로 빈 텍스트 반환)
+        result_text = ""
+        for attempt in range(2):
+            response = client.models.generate_content(
+                model="gemini-3.1-pro-preview",
+                contents=contents,
+                config=config,
+            )
+            result_text = (response.text or "").strip()
+            if result_text:
+                break
+            if attempt == 0:
+                log("    [Gemini OCR] 빈 응답 수신, 재시도...")
+                time.sleep(1)
+
+        if not result_text:
+            log("    [Gemini OCR] 빈 응답 (재시도 후에도 실패)")
+            return None
+
         if "```json" in result_text:
             result_text = result_text.split("```json")[1].split("```")[0].strip()
         elif "```" in result_text:
