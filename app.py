@@ -2147,7 +2147,8 @@ def _disclosure_worker(shared, save_path=None, selected_banks=None, api_key=None
                 delinquency_path = create_delinquency_excel(
                     download_path=download_path,
                     api_key=api_key,
-                    log_callback=log_callback
+                    log_callback=log_callback,
+                    existing_data=delinquency_data,
                 )
                 if delinquency_path:
                     shared['delinquency_excel_path'] = delinquency_path

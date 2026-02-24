@@ -128,7 +128,7 @@ def _extract_with_gemini(pdf_path: str, api_key: str, log_callback=None) -> Opti
         )
 
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-3.1-pro-preview",
             contents=[
                 types.Part.from_bytes(
                     data=pdf_bytes,
@@ -456,10 +456,13 @@ def create_delinquency_excel(
     download_path: str,
     output_path: Optional[str] = None,
     api_key: str = None,
-    log_callback=None
+    log_callback=None,
+    existing_data: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> Optional[str]:
     """
     다운로드 폴더의 통일경영공시 PDF들에서 연체율을 추출하여 엑셀 파일을 생성한다.
+
+    existing_data가 주어지면 중복 추출 없이 해당 데이터로 엑셀만 생성한다.
     """
     def log(msg):
         if log_callback:
@@ -470,31 +473,36 @@ def create_delinquency_excel(
         log("연체율 추출 대상 통일경영공시 PDF 파일이 없습니다.")
         return None
 
-    method = "Gemini OCR" if (api_key and GEMINI_AVAILABLE) else ("pdfplumber" if PDFPLUMBER_AVAILABLE else None)
-    if not method:
-        log("pdfplumber와 Gemini 모두 사용 불가하여 연체율 추출을 건너뜁니다.")
-        return None
-
-    log(f"연체율 추출 시작: {len(pdf_files)}개 PDF ({method})")
     t0 = time.time()
 
-    # 병렬 추출 (Gemini 사용 시 최대 5개 동시, pdfplumber는 3개)
-    max_workers = 5 if (api_key and GEMINI_AVAILABLE) else 3
-    results_map = {}  # bank_name → data
+    # 이미 추출된 데이터가 있으면 재추출 생략
+    if existing_data:
+        log(f"연체율 엑셀 생성: 기추출 데이터 {len(existing_data)}건 사용")
+        results_map = {bn: existing_data.get(bn) for bn, _ in pdf_files}
+    else:
+        method = "Gemini OCR" if (api_key and GEMINI_AVAILABLE) else ("pdfplumber" if PDFPLUMBER_AVAILABLE else None)
+        if not method:
+            log("pdfplumber와 Gemini 모두 사용 불가하여 연체율 추출을 건너뜁니다.")
+            return None
 
-    def _extract_one(bank_name, pdf_path):
-        return bank_name, extract_delinquency_from_pdf(pdf_path, api_key=api_key, log_callback=log_callback)
+        log(f"연체율 추출 시작: {len(pdf_files)}개 PDF ({method})")
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(_extract_one, bn, pp): bn for bn, pp in pdf_files}
-        for future in as_completed(futures):
-            try:
-                bank_name, data = future.result()
-                results_map[bank_name] = data
-            except Exception as e:
-                bn = futures[future]
-                results_map[bn] = None
-                log(f"  ❌ {bn}: 추출 오류 - {e}")
+        max_workers = 5 if (api_key and GEMINI_AVAILABLE) else 3
+        results_map = {}
+
+        def _extract_one(bank_name, pdf_path):
+            return bank_name, extract_delinquency_from_pdf(pdf_path, api_key=api_key, log_callback=log_callback)
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_extract_one, bn, pp): bn for bn, pp in pdf_files}
+            for future in as_completed(futures):
+                try:
+                    bank_name, data = future.result()
+                    results_map[bank_name] = data
+                except Exception as e:
+                    bn = futures[future]
+                    results_map[bn] = None
+                    log(f"  ❌ {bn}: 추출 오류 - {e}")
 
     # 결과를 원래 순서대로 정렬
     rows = []
