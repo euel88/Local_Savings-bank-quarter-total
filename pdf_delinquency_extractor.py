@@ -21,14 +21,34 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# 연체율 관련 키워드 (통일경영공시 PDF에서 사용되는 다양한 표현)
+_DELINQUENCY_KEYWORDS = [
+    "연체율",
+    "연체대출채권비율",
+    "연체대출금비율",
+    "연체비율",
+]
 
-def extract_delinquency_from_pdf(pdf_path: str) -> Optional[Dict[str, str]]:
+
+def _is_delinquency_cell(text: str) -> bool:
+    """셀 텍스트가 연체율 관련 항목인지 판별한다."""
+    if not text:
+        return False
+    cleaned = text.strip().replace(" ", "").replace("\n", "")
+    return any(kw in cleaned for kw in _DELINQUENCY_KEYWORDS)
+
+
+def extract_delinquency_from_pdf(pdf_path: str, log_callback=None) -> Optional[Dict[str, str]]:
     """
     단일 통일경영공시 PDF에서 연체율 값을 추출한다.
 
     Returns:
         {"연체율_당기": "2.35", "연체율_전기": "1.98"} 형태 또는 None
     """
+    def log(msg):
+        if log_callback:
+            log_callback(msg)
+
     if not PDFPLUMBER_AVAILABLE:
         logger.warning("pdfplumber가 설치되지 않았습니다.")
         return None
@@ -38,20 +58,36 @@ def extract_delinquency_from_pdf(pdf_path: str) -> Optional[Dict[str, str]]:
 
     try:
         with pdfplumber.open(pdf_path) as pdf:
-            # 모든 페이지에서 테이블 추출 시도
-            for page in pdf.pages:
+            # 1차: 모든 페이지에서 테이블 추출 시도
+            for page_num, page in enumerate(pdf.pages):
                 result = _search_delinquency_in_page(page)
                 if result:
+                    log(f"    [테이블 추출] 페이지 {page_num + 1}에서 연체율 발견")
                     return result
 
-            # 테이블 추출 실패 시 텍스트 기반 추출
-            for page in pdf.pages:
+            # 2차: 텍스트 기반 추출
+            for page_num, page in enumerate(pdf.pages):
                 result = _search_delinquency_in_text(page)
                 if result:
+                    log(f"    [텍스트 추출] 페이지 {page_num + 1}에서 연체율 발견")
                     return result
+
+            # 실패 시 디버그 정보 출력
+            log(f"    [디버그] 총 {len(pdf.pages)}페이지 검색했으나 연체율 미발견")
+            for page_num, page in enumerate(pdf.pages):
+                text = page.extract_text() or ""
+                for kw in _DELINQUENCY_KEYWORDS:
+                    if kw in text.replace(" ", ""):
+                        # 키워드는 있는데 추출 실패한 경우 주변 텍스트 출력
+                        idx = text.replace(" ", "").index(kw)
+                        # 원본 텍스트에서 해당 위치 근처 출력
+                        snippet = text[max(0, idx - 20):idx + 80]
+                        log(f"    [디버그] 페이지 {page_num + 1}에 '{kw}' 키워드 존재 (주변: ...{snippet}...)")
+                        break
 
     except Exception as e:
         logger.error(f"PDF 파싱 오류 ({pdf_path}): {e}")
+        log(f"    PDF 파싱 오류: {e}")
 
     return None
 
@@ -63,22 +99,41 @@ def _search_delinquency_in_page(page) -> Optional[Dict[str, str]]:
         return None
 
     for table in tables:
+        if not table:
+            continue
+
+        # 헤더 행 감지: 첫 몇 행 중 기간 키워드가 있는 행을 헤더로 사용
+        header_row_idx = 0
+        for h_idx in range(min(3, len(table))):
+            row = table[h_idx]
+            if row and any(
+                cell and any(kw in cell.strip().replace(" ", "").replace("\n", "")
+                             for kw in ["전기", "전년", "당기", "금기", "공시기준", "전년동기"])
+                for cell in row if cell
+            ):
+                header_row_idx = h_idx
+                break
+
+        header_row = table[header_row_idx] if header_row_idx < len(table) else table[0]
+
         for row_idx, row in enumerate(table):
-            if not row:
+            if not row or row_idx == header_row_idx:
                 continue
-            # 셀 텍스트에서 '연체율' 키워드 탐색
+            # 셀 텍스트에서 연체율 키워드 탐색
             for col_idx, cell in enumerate(row):
                 if not cell:
                     continue
-                cell_clean = cell.strip().replace(" ", "")
-                if "연체율" in cell_clean:
-                    return _extract_values_from_row(table, row_idx, row, col_idx)
+                if _is_delinquency_cell(cell):
+                    result = _extract_values_from_row(table, row_idx, row, col_idx, header_row)
+                    if result:
+                        return result
 
     return None
 
 
 def _extract_values_from_row(
-    table: list, row_idx: int, row: list, label_col: int
+    table: list, row_idx: int, row: list, label_col: int,
+    header_row: list = None
 ) -> Optional[Dict[str, str]]:
     """
     연체율이 발견된 행에서 수치 값을 추출한다.
@@ -109,7 +164,8 @@ def _extract_values_from_row(
         return None
 
     # 헤더 행에서 전기/당기 판별 시도
-    header_row = table[0] if table else []
+    if header_row is None:
+        header_row = table[0] if table else []
     prior_cols, current_cols = _identify_period_columns(header_row)
 
     result = {}
@@ -120,10 +176,11 @@ def _extract_values_from_row(
             elif col_idx in prior_cols:
                 result["연체율_전기"] = str(val)
     elif len(numbers) >= 2:
-        # 헤더 판별 불가 시: 마지막 열 = 당기, 그 앞 = 전기 (일반적 공시 패턴)
+        # 헤더 판별 불가 시: 위치 기반 추정
+        # 통일경영공시 PDF는 보통 [공시기준(당기), 전년동기(전기)] 순서
         numbers.sort(key=lambda x: x[0])
-        result["연체율_전기"] = str(numbers[-2][1])
-        result["연체율_당기"] = str(numbers[-1][1])
+        result["연체율_당기"] = str(numbers[0][1])
+        result["연체율_전기"] = str(numbers[1][1])
     elif len(numbers) == 1:
         result["연체율_당기"] = str(numbers[0][1])
 
@@ -141,10 +198,10 @@ def _identify_period_columns(header_row: list) -> Tuple[set, set]:
     for idx, cell in enumerate(header_row):
         if not cell:
             continue
-        cell_clean = cell.strip().replace(" ", "")
+        cell_clean = cell.strip().replace(" ", "").replace("\n", "")
         if any(kw in cell_clean for kw in ["전기", "전년", "전분기", "전년동기"]):
             prior_cols.add(idx)
-        elif any(kw in cell_clean for kw in ["당기", "당분기", "금기", "금분기"]):
+        elif any(kw in cell_clean for kw in ["당기", "당분기", "금기", "금분기", "공시기준"]):
             current_cols.add(idx)
 
     return prior_cols, current_cols
@@ -153,24 +210,56 @@ def _identify_period_columns(header_row: list) -> Tuple[set, set]:
 def _search_delinquency_in_text(page) -> Optional[Dict[str, str]]:
     """페이지 텍스트에서 연체율 값을 정규식으로 추출한다."""
     text = page.extract_text()
-    if not text or "연체율" not in text:
+    if not text:
         return None
 
-    # "연체율" 뒤에 나오는 숫자 패턴 매칭
-    # 예: "연체율(%) 1.98 2.35" 또는 "연체율 1.98% 2.35%"
-    pattern = r"연체율[^\d]*?([\d]+\.[\d]+)[%\s]+([\d]+\.[\d]+)"
-    match = re.search(pattern, text)
-    if match:
-        return {
-            "연체율_전기": match.group(1),
-            "연체율_당기": match.group(2),
-        }
+    text_clean = text.replace(" ", "")
 
-    # 단일 값만 매칭
-    pattern_single = r"연체율[^\d]*?([\d]+\.[\d]+)"
-    match = re.search(pattern_single, text)
-    if match:
-        return {"연체율_당기": match.group(1)}
+    # 연체율 키워드 존재 확인
+    has_keyword = any(kw in text_clean for kw in _DELINQUENCY_KEYWORDS)
+    if not has_keyword:
+        return None
+
+    # 각 키워드에 대해 패턴 매칭 시도
+    for kw in _DELINQUENCY_KEYWORDS:
+        if kw not in text_clean:
+            continue
+
+        # 패턴 1: 키워드 뒤에 두 개의 숫자 (소수점 있는 경우)
+        pattern_two = kw + r"[^\d]*?([\d]+(?:\.[\d]+)?)[%\s]+([\d]+(?:\.[\d]+)?)"
+        match = re.search(pattern_two, text_clean)
+        if match:
+            val1 = match.group(1)
+            val2 = match.group(2)
+            # 통일경영공시: 보통 공시기준(당기)이 먼저, 전년동기(전기)가 뒤
+            return {
+                "연체율_당기": val1,
+                "연체율_전기": val2,
+            }
+
+        # 패턴 2: 키워드 뒤에 한 개의 숫자
+        pattern_one = kw + r"[^\d]*?([\d]+(?:\.[\d]+)?)"
+        match = re.search(pattern_one, text_clean)
+        if match:
+            return {"연체율_당기": match.group(1)}
+
+    # 원본 텍스트(공백 포함)에서도 시도
+    for kw in _DELINQUENCY_KEYWORDS:
+        if kw not in text.replace(" ", ""):
+            continue
+
+        pattern_two = r"연체[^\d]*?비율[^\d]*?([\d]+(?:\.[\d]+)?)[%\s]+([\d]+(?:\.[\d]+)?)"
+        match = re.search(pattern_two, text)
+        if match:
+            return {
+                "연체율_당기": match.group(1),
+                "연체율_전기": match.group(2),
+            }
+
+        pattern_one = r"연체[^\d]*?비율[^\d]*?([\d]+(?:\.[\d]+)?)"
+        match = re.search(pattern_one, text)
+        if match:
+            return {"연체율_당기": match.group(1)}
 
     return None
 
@@ -179,9 +268,9 @@ def _parse_number(text: str) -> Optional[float]:
     """텍스트에서 숫자(연체율 %) 값을 파싱한다."""
     if not text:
         return None
-    cleaned = text.strip().replace(",", "").replace("%", "").replace(" ", "")
+    cleaned = text.strip().replace(",", "").replace("%", "").replace(" ", "").replace("\n", "")
     # '-' 또는 빈 값
-    if cleaned in ("-", "–", "—", "", "N/A", "해당없음"):
+    if cleaned in ("-", "–", "—", "", "N/A", "해당없음", "해당\n없음"):
         return None
     try:
         val = float(cleaned)
@@ -228,7 +317,7 @@ def create_delinquency_excel(
 
     rows = []
     for bank_name, pdf_path in pdf_files:
-        data = extract_delinquency_from_pdf(pdf_path)
+        data = extract_delinquency_from_pdf(pdf_path, log_callback=log_callback)
         if data:
             rows.append({
                 "No": len(rows) + 1,
@@ -301,7 +390,7 @@ def extract_all_delinquency(download_path: str, log_callback=None) -> Dict[str, 
     log(f"연체율 추출 시작: {len(pdf_files)}개 통일경영공시 PDF")
     result = {}
     for bank_name, pdf_path in pdf_files:
-        data = extract_delinquency_from_pdf(pdf_path)
+        data = extract_delinquency_from_pdf(pdf_path, log_callback=log_callback)
         if data:
             result[bank_name] = data
             log(f"  {bank_name}: 전기 {data.get('연체율_전기', '-')}% / 당기 {data.get('연체율_당기', '-')}%")
