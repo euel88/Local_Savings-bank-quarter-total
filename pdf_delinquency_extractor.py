@@ -279,6 +279,161 @@ def create_delinquency_excel(
         return None
 
 
+def extract_all_delinquency(download_path: str, log_callback=None) -> Dict[str, Dict[str, str]]:
+    """
+    다운로드 폴더의 모든 통일경영공시 PDF에서 연체율을 추출한다.
+
+    Returns:
+        {"은행명": {"연체율_전기": "1.98", "연체율_당기": "2.35"}, ...}
+    """
+    if not PDFPLUMBER_AVAILABLE:
+        return {}
+
+    def log(msg):
+        if log_callback:
+            log_callback(msg)
+
+    pdf_files = _find_disclosure_pdfs(download_path)
+    if not pdf_files:
+        log("연체율 추출 대상 통일경영공시 PDF 파일이 없습니다.")
+        return {}
+
+    log(f"연체율 추출 시작: {len(pdf_files)}개 통일경영공시 PDF")
+    result = {}
+    for bank_name, pdf_path in pdf_files:
+        data = extract_delinquency_from_pdf(pdf_path)
+        if data:
+            result[bank_name] = data
+            log(f"  {bank_name}: 전기 {data.get('연체율_전기', '-')}% / 당기 {data.get('연체율_당기', '-')}%")
+        else:
+            log(f"  {bank_name}: 연체율 추출 실패")
+
+    log(f"연체율 추출 완료: {len(result)}/{len(pdf_files)}개 성공")
+    return result
+
+
+def patch_excel_with_delinquency(
+    excel_path: str,
+    delinquency_data: Dict[str, Dict[str, str]],
+    log_callback=None
+) -> bool:
+    """
+    기존 분기총괄 엑셀의 연체율 컬럼에 PDF에서 추출한 연체율을 기입한다.
+
+    Args:
+        excel_path: 기존 분기총괄 엑셀 파일 경로
+        delinquency_data: {"은행명": {"연체율_전기": "1.98", "연체율_당기": "2.35"}}
+        log_callback: 로그 콜백
+
+    Returns:
+        성공 여부
+    """
+    if not delinquency_data or not excel_path or not os.path.exists(excel_path):
+        return False
+
+    def log(msg):
+        if log_callback:
+            log_callback(msg)
+
+    try:
+        from openpyxl import load_workbook
+
+        wb = load_workbook(excel_path)
+        if "분기총괄" not in wb.sheetnames:
+            log("분기총괄 시트를 찾을 수 없습니다.")
+            wb.close()
+            return False
+
+        ws = wb["분기총괄"]
+
+        # 헤더 행에서 컬럼 인덱스 찾기
+        header_row = [cell.value for cell in ws[1]]
+        company_col = None
+        prior_col = None
+        current_col = None
+
+        for idx, val in enumerate(header_row):
+            if not val:
+                continue
+            val_str = str(val).strip()
+            if val_str == "회사명":
+                company_col = idx
+            elif "연체율" in val_str and any(kw in val_str for kw in ["전년동기", "전기"]):
+                prior_col = idx
+            elif "연체율" in val_str and any(kw in val_str for kw in ["금분기", "금기", "당기"]):
+                current_col = idx
+
+        if company_col is None:
+            log("회사명 컬럼을 찾을 수 없습니다.")
+            wb.close()
+            return False
+
+        if prior_col is None and current_col is None:
+            log("연체율 컬럼을 찾을 수 없습니다.")
+            wb.close()
+            return False
+
+        patched = 0
+        for row_idx in range(2, ws.max_row + 1):
+            bank_name = ws.cell(row=row_idx, column=company_col + 1).value
+            if not bank_name:
+                continue
+            bank_name = str(bank_name).strip()
+
+            # 은행명 매칭 (정확 일치 또는 부분 일치)
+            matched_data = None
+            if bank_name in delinquency_data:
+                matched_data = delinquency_data[bank_name]
+            else:
+                for pdf_bank, data in delinquency_data.items():
+                    if pdf_bank in bank_name or bank_name in pdf_bank:
+                        matched_data = data
+                        break
+                    # "저축은행" 제거 후 비교
+                    clean_pdf = pdf_bank.replace("저축은행", "").strip()
+                    clean_bank = bank_name.replace("저축은행", "").strip()
+                    if clean_pdf and clean_bank and (clean_pdf in clean_bank or clean_bank in clean_pdf):
+                        matched_data = data
+                        break
+
+            if not matched_data:
+                continue
+
+            updated = False
+            if prior_col is not None and matched_data.get("연체율_전기"):
+                cell = ws.cell(row=row_idx, column=prior_col + 1)
+                existing = cell.value
+                if not existing or str(existing).strip() in ("", "-", "0", "0.0"):
+                    try:
+                        cell.value = float(matched_data["연체율_전기"])
+                    except (ValueError, TypeError):
+                        cell.value = matched_data["연체율_전기"]
+                    updated = True
+
+            if current_col is not None and matched_data.get("연체율_당기"):
+                cell = ws.cell(row=row_idx, column=current_col + 1)
+                existing = cell.value
+                if not existing or str(existing).strip() in ("", "-", "0", "0.0"):
+                    try:
+                        cell.value = float(matched_data["연체율_당기"])
+                    except (ValueError, TypeError):
+                        cell.value = matched_data["연체율_당기"]
+                    updated = True
+
+            if updated:
+                patched += 1
+
+        wb.save(excel_path)
+        wb.close()
+
+        log(f"연체율 기입 완료: {patched}개 은행 엑셀에 반영")
+        return patched > 0
+
+    except Exception as e:
+        log(f"연체율 엑셀 기입 오류: {e}")
+        return False
+
+
 def _find_disclosure_pdfs(download_path: str) -> List[Tuple[str, str]]:
     """
     다운로드 폴더에서 통일경영공시 PDF 파일을 찾아 (은행명, 경로) 리스트를 반환한다.
