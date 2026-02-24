@@ -149,7 +149,24 @@ def _extract_with_gemini(pdf_path: str, api_key: str, log_callback=None) -> Opti
         elif "```" in result_text:
             result_text = result_text.split("```")[1].split("```")[0].strip()
 
-        data = json.loads(result_text)
+        # JSON 파싱 (작은따옴표 등 비표준 형식 대응)
+        try:
+            data = json.loads(result_text)
+        except json.JSONDecodeError:
+            # 작은따옴표 → 큰따옴표 치환 후 재시도
+            fixed = result_text.replace("'", '"')
+            try:
+                data = json.loads(fixed)
+            except json.JSONDecodeError:
+                # 정규식으로 직접 값 추출 시도
+                data = {}
+                for key in ["연체율_당기", "연체율_전기"]:
+                    m = re.search(rf'["\']?{key}["\']?\s*[:=]\s*["\']?([\d.]+)', result_text)
+                    if m:
+                        data[key] = m.group(1)
+                if not data:
+                    log(f"    [Gemini OCR] JSON 파싱 실패: {result_text[:120]}")
+                    return None
 
         # 유효성 검증
         result = {}
