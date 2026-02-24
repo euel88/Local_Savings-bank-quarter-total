@@ -162,13 +162,26 @@ class GeminiExcelGenerator:
                 extracted.get(k) is not None and extracted.get(k) != ""
                 for k in key_fields
             )
-            if not has_key_data and filepath:
-                fallback = DirectExcelGenerator()
-                fallback_data = fallback._extract_from_file(filepath)
-                if fallback_data:
-                    for k, v in fallback_data.items():
-                        if v is not None and (extracted.get(k) is None or extracted.get(k) == ""):
-                            extracted[k] = v
+            # Gemini 결과에서 누락된 항목(연체율 등)을 DirectExcelGenerator로 항상 보완
+            if filepath:
+                all_keys = [
+                    "총자산_전기", "총자산_당기", "당기순이익_전기", "당기순이익_당기",
+                    "자기자본_전기", "자기자본_당기", "총여신_전기", "총여신_당기",
+                    "총수신_전기", "총수신_당기", "BIS비율_전기", "BIS비율_당기",
+                    "고정이하여신비율_전기", "고정이하여신비율_당기",
+                    "연체율_전기", "연체율_당기",
+                ]
+                has_missing = not has_key_data or any(
+                    extracted.get(k) is None or extracted.get(k) == ""
+                    for k in all_keys
+                )
+                if has_missing:
+                    fallback = DirectExcelGenerator()
+                    fallback_data = fallback._extract_from_file(filepath)
+                    if fallback_data:
+                        for k, v in fallback_data.items():
+                            if v is not None and (extracted.get(k) is None or extracted.get(k) == ""):
+                                extracted[k] = v
 
             row = self._build_row(idx, bank_name, date_info, extracted)
             formatted_data.append(row)
