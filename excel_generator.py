@@ -508,8 +508,15 @@ GeminiExcelGenerator = ChatGPTExcelGenerator
 
 
 def _write_styled_excel(df, output_path, validation_result=None):
-    """엑셀 파일 작성 및 스타일링"""
+    """엑셀 파일 작성 및 스타일링 (천단위 구분, 비율 소수점 2자리)"""
+    from openpyxl.utils import get_column_letter as _gcl
+
     config = ExcelGeneratorConfig()
+
+    # 금액/비율 컬럼 인덱스 사전 생성 (1-based, 헤더 제외 데이터행부터)
+    amount_set = set(config.AMOUNT_COLUMNS)
+    ratio_set = set(config.RATIO_COLUMNS)
+
     with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
         df.to_excel(writer, sheet_name='분기총괄', index=False)
         ws = writer.sheets['분기총괄']
@@ -523,6 +530,26 @@ def _write_styled_excel(df, output_path, validation_result=None):
         for i, col in enumerate(df.columns):
             letter = _get_column_letter(i)
             ws.column_dimensions[letter].width = col_widths.get(col, 16)
+
+            # 숫자 포맷 적용 (데이터행: 2행부터)
+            if col in amount_set:
+                for row_idx in range(2, ws.max_row + 1):
+                    cell = ws.cell(row=row_idx, column=i + 1)
+                    if cell.value is not None and cell.value != "":
+                        try:
+                            cell.value = float(cell.value)
+                            cell.number_format = '#,##0'
+                        except (ValueError, TypeError):
+                            pass
+            elif col in ratio_set:
+                for row_idx in range(2, ws.max_row + 1):
+                    cell = ws.cell(row=row_idx, column=i + 1)
+                    if cell.value is not None and cell.value != "":
+                        try:
+                            cell.value = float(cell.value)
+                            cell.number_format = '0.00'
+                        except (ValueError, TypeError):
+                            pass
 
         if validation_result:
             vd = []

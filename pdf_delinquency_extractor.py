@@ -718,6 +718,7 @@ def patch_excel_with_delinquency(
                 if not existing or str(existing).strip() in ("", "-", "0", "0.0"):
                     try:
                         cell.value = float(matched_data["연체율_전기"])
+                        cell.number_format = '0.00'
                     except (ValueError, TypeError):
                         cell.value = matched_data["연체율_전기"]
                     updated = True
@@ -728,6 +729,7 @@ def patch_excel_with_delinquency(
                 if not existing or str(existing).strip() in ("", "-", "0", "0.0"):
                     try:
                         cell.value = float(matched_data["연체율_당기"])
+                        cell.number_format = '0.00'
                     except (ValueError, TypeError):
                         cell.value = matched_data["연체율_당기"]
                     updated = True
