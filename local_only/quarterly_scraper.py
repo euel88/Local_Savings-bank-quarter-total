@@ -396,7 +396,9 @@ class DriverManager:
             options.add_argument('--disable-infobars')
             options.add_argument('--disable-notifications')
             options.add_argument('--disable-popup-blocking')
-            
+            options.add_argument('--disk-cache-size=0')
+            options.add_argument('--disable-application-cache')
+
             # 이미지 로딩 활성화 (필요시)
             prefs = {
                 'profile.default_content_setting_values': {
@@ -405,7 +407,7 @@ class DriverManager:
                     'javascript': 1,  # JavaScript 허용 (필요)
                     'notifications': 2  # 알림 차단
                 },
-                'disk-cache-size': 4096,
+                'disk-cache-size': 0,
             }
             options.add_experimental_option('prefs', prefs)
             
@@ -833,96 +835,101 @@ class BankScraper:
         self.driver_manager = driver_manager
         self.progress_manager = progress_manager
     
+    @staticmethod
+    def _date_sort_key(date_str):
+        """날짜 문자열에서 (연도, 월) 튜플을 추출하여 정렬 키로 사용"""
+        year_match = re.search(r'(\d{4})년', date_str)
+        month_match = re.search(r'(\d{1,2})월', date_str)
+        year = int(year_match.group(1)) if year_match else 0
+        month = int(month_match.group(1)) if month_match else 0
+        return (year, month)
+
+    @staticmethod
+    def normalize_date(date_str):
+        """날짜를 'YYYY년 MM월말' 형식으로 통일 (예: 2025년 09월말)"""
+        if not date_str or date_str in ("날짜 정보 없음", "날짜 추출 실패"):
+            return date_str
+        match = re.search(r'(\d{4})년\s*(\d{1,2})월', date_str)
+        if match:
+            year = match.group(1)
+            month = match.group(2).zfill(2)
+            return f"{year}년 {month}월말"
+        return date_str
+
     def extract_date_information(self, driver):
         """웹페이지에서 공시 날짜 정보를 추출합니다. (개선된 버전)"""
         try:
+            date_pattern = re.compile(r'\d{4}년\s*\d{1,2}월\s*말?')
+
             # 방법 1: 당기 데이터 우선 찾기
             current_period_elements = driver.find_elements(
-                By.XPATH, 
+                By.XPATH,
                 "//*[contains(text(), '당기') and contains(text(), '년') and contains(text(), '월')]"
             )
-            
+
             if current_period_elements:
                 for element in current_period_elements:
                     text = element.text
-                    # 정규식으로 날짜 패턴 추출
-                    date_pattern = re.compile(r'\d{4}년\d{1,2}월말?')
                     matches = date_pattern.findall(text)
-                    
+
                     if matches:
-                        # 가장 최근 연도 찾기
-                        latest_date = max(matches, key=lambda x: int(x[:4]))
+                        latest_date = max(matches, key=self._date_sort_key)
                         self.logger.log_message(f"당기 날짜 발견: {latest_date}", verbose=False)
-                        return latest_date
-            
+                        return self.normalize_date(latest_date)
+
             # 방법 2: 모든 날짜를 찾아서 가장 최근 것 선택
             all_date_elements = driver.find_elements(
-                By.XPATH, 
+                By.XPATH,
                 "//*[contains(text(), '년') and contains(text(), '월')]"
             )
-            
+
             all_dates = []
             for element in all_date_elements:
                 text = element.text
-                # 정규식 패턴 개선 (월말이 없는 경우도 포함)
-                date_pattern = re.compile(r'\d{4}년\d{1,2}월말?')
                 matches = date_pattern.findall(text)
                 all_dates.extend(matches)
-            
+
             if all_dates:
-                # 중복 제거 및 정렬
                 unique_dates = list(set(all_dates))
-                # 연도 기준으로 정렬하여 가장 최근 날짜 선택
-                sorted_dates = sorted(unique_dates, key=lambda x: int(x[:4]), reverse=True)
-                
-                # 2025년 데이터가 있으면 우선 선택
-                for date in sorted_dates:
-                    if "2025년" in date:
-                        self.logger.log_message(f"최신 날짜 선택: {date}", verbose=False)
-                        return date
-                
-                # 2025년이 없으면 가장 최근 날짜 반환
-                return sorted_dates[0]
-            
+                sorted_dates = sorted(unique_dates, key=self._date_sort_key, reverse=True)
+                self.logger.log_message(f"최신 날짜 선택: {sorted_dates[0]}", verbose=False)
+                return self.normalize_date(sorted_dates[0])
+
             # 방법 3: JavaScript로 직접 추출 (더 정확함)
             js_script = """
-            var dates = [];
             var allText = document.body.innerText;
-            
-            // 당기 관련 텍스트 우선 찾기
-            var currentPeriodMatch = allText.match(/당기[^\\n]*?(\\d{4}년\\d{1,2}월말?)/);
+
+            // 당기 관련 텍스트 우선 찾기 (공백 허용)
+            var currentPeriodMatch = allText.match(/당기[^\\n]*?(\\d{4}년\\s*\\d{1,2}월\\s*말?)/);
             if (currentPeriodMatch) {
                 return currentPeriodMatch[1];
             }
-            
-            // 모든 날짜 찾아서 최신 것 반환
-            var allMatches = allText.match(/\\d{4}년\\d{1,2}월말?/g);
+
+            // 모든 날짜 찾아서 최신 것 반환 (공백 허용)
+            var allMatches = allText.match(/\\d{4}년\\s*\\d{1,2}월\\s*말?/g);
             if (allMatches) {
-                // 연도별로 정렬
+                // 연도+월 기준으로 정렬
                 allMatches.sort(function(a, b) {
-                    return parseInt(b.substr(0, 4)) - parseInt(a.substr(0, 4));
+                    var aYear = parseInt(a.match(/\\d{4}/)[0]);
+                    var bYear = parseInt(b.match(/\\d{4}/)[0]);
+                    if (aYear !== bYear) return bYear - aYear;
+                    var aMonth = parseInt(a.match(/년\\s*(\\d{1,2})월/)[1]);
+                    var bMonth = parseInt(b.match(/년\\s*(\\d{1,2})월/)[1]);
+                    return bMonth - aMonth;
                 });
-                
-                // 2025년 우선
-                for (var i = 0; i < allMatches.length; i++) {
-                    if (allMatches[i].includes('2025년')) {
-                        return allMatches[i];
-                    }
-                }
-                
                 return allMatches[0];
             }
-            
+
             return '';
             """
-            
+
             date_text = driver.execute_script(js_script)
             if date_text:
                 self.logger.log_message(f"JavaScript로 추출한 날짜: {date_text}", verbose=False)
-                return date_text
-            
+                return self.normalize_date(date_text)
+
             return "날짜 정보 없음"
-            
+
         except Exception as e:
             self.logger.log_message(f"날짜 정보 추출 오류: {str(e)}", verbose=False)
             return "날짜 추출 실패"

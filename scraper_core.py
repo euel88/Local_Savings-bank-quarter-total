@@ -145,6 +145,8 @@ def create_driver():
         options.add_argument('--disable-infobars')
         options.add_argument('--disable-notifications')
         options.add_argument('--disable-popup-blocking')
+        options.add_argument('--disk-cache-size=0')
+        options.add_argument('--disable-application-cache')
 
         prefs = {
             'profile.default_content_setting_values': {
@@ -206,9 +208,32 @@ class BankScraper:
         self.config = config
         self.logger = logger
 
+    @staticmethod
+    def _date_sort_key(date_str):
+        """날짜 문자열에서 (연도, 월) 튜플을 추출하여 정렬 키로 사용"""
+        year_match = re.search(r'(\d{4})년', date_str)
+        month_match = re.search(r'(\d{1,2})월', date_str)
+        year = int(year_match.group(1)) if year_match else 0
+        month = int(month_match.group(1)) if month_match else 0
+        return (year, month)
+
+    @staticmethod
+    def normalize_date(date_str):
+        """날짜를 'YYYY년 MM월말' 형식으로 통일 (예: 2025년 09월말)"""
+        if not date_str or date_str in ("날짜 정보 없음", "날짜 추출 실패"):
+            return date_str
+        match = re.search(r'(\d{4})년\s*(\d{1,2})월', date_str)
+        if match:
+            year = match.group(1)
+            month = match.group(2).zfill(2)
+            return f"{year}년 {month}월말"
+        return date_str
+
     def extract_date_information(self, driver):
         """웹페이지에서 공시 날짜 정보를 추출합니다."""
         try:
+            date_pattern = re.compile(r'\d{4}년\s*\d{1,2}월\s*말?')
+
             # 당기 데이터 우선 찾기
             current_period_elements = driver.find_elements(
                 By.XPATH,
@@ -218,16 +243,10 @@ class BankScraper:
             if current_period_elements:
                 for element in current_period_elements:
                     text = element.text
-                    date_pattern = re.compile(r'\d{4}년\s*\d{1,2}월\s*말?')
                     matches = date_pattern.findall(text)
-
                     if matches:
-                        latest_date = max(matches, key=lambda x: int(re.search(r'\d{4}', x).group()))
-                        # 날짜 형식 정리 (예: "2025년 9월말")
-                        cleaned_date = re.sub(r'\s+', '', latest_date)
-                        if not cleaned_date.endswith('말'):
-                            cleaned_date += '말'
-                        return cleaned_date
+                        latest_date = max(matches, key=self._date_sort_key)
+                        return self.normalize_date(latest_date)
 
             # 모든 날짜 찾기
             all_date_elements = driver.find_elements(
@@ -238,17 +257,13 @@ class BankScraper:
             all_dates = []
             for element in all_date_elements:
                 text = element.text
-                date_pattern = re.compile(r'\d{4}년\s*\d{1,2}월\s*말?')
                 matches = date_pattern.findall(text)
                 all_dates.extend(matches)
 
             if all_dates:
                 unique_dates = list(set(all_dates))
-                sorted_dates = sorted(unique_dates, key=lambda x: int(re.search(r'\d{4}', x).group()), reverse=True)
-                cleaned_date = re.sub(r'\s+', '', sorted_dates[0])
-                if not cleaned_date.endswith('말'):
-                    cleaned_date += '말'
-                return cleaned_date
+                sorted_dates = sorted(unique_dates, key=self._date_sort_key, reverse=True)
+                return self.normalize_date(sorted_dates[0])
 
             return "날짜 정보 없음"
 

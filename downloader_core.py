@@ -165,6 +165,8 @@ class DisclosureDownloader:
         chrome_options.add_argument('--disable-background-networking')
         chrome_options.add_argument('--disable-sync')
         chrome_options.add_argument('--disable-translate')
+        chrome_options.add_argument('--disk-cache-size=0')
+        chrome_options.add_argument('--disable-application-cache')
 
         chrome_options.add_argument(
             '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
