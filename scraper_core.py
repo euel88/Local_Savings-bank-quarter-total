@@ -145,8 +145,6 @@ def create_driver():
         options.add_argument('--disable-infobars')
         options.add_argument('--disable-notifications')
         options.add_argument('--disable-popup-blocking')
-        options.add_argument('--disk-cache-size=0')
-        options.add_argument('--disable-application-cache')
 
         prefs = {
             'profile.default_content_setting_values': {
