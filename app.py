@@ -639,15 +639,12 @@ def _render_scraping_progress():
 
     elapsed = time.time() - start_time if start_time else 0
 
-    # 완료/오류 시: session_state 동기화 (1회만)
+    # 완료/오류 시: session_state 동기화 후 전체 페이지 리렌더링 (폴링 중단)
     is_running = shared.get('scraping_running', False)
     if not is_running and phase in ('done', 'error'):
         if st.session_state.scraping_running:
             _sync_scraping_to_session()
-        if phase == 'done':
-            st.success("✅ 스크래핑 완료!")
-        else:
-            st.error("❌ 스크래핑 중 오류가 발생했습니다.")
+            st.rerun()
         return
 
     # 진행 중 UI
@@ -700,22 +697,12 @@ def _render_disclosure_progress():
 
     elapsed = time.time() - start_time if start_time else 0
 
-    # 완료/오류 시: session_state 동기화 (1회만)
+    # 완료/오류 시: session_state 동기화 후 전체 페이지 리렌더링 (폴링 중단)
     is_running = shared.get('running', False)
     if not is_running and phase in ('done', 'error'):
         if st.session_state.disclosure_running:
             _sync_disclosure_to_session()
-        if phase == 'done':
-            merge_done = shared.get('merge_done', False)
-            has_delinquency = bool(shared.get('delinquency_data'))
-            if merge_done:
-                st.success("✅ 공시 다운로드 + 연체율 추출 + merge 완료!")
-            elif has_delinquency:
-                st.success("✅ 공시 다운로드 + 연체율 추출 완료!")
-            else:
-                st.success("✅ 공시 다운로드 완료 (연체율 추출 없음)")
-        else:
-            st.error(f"❌ 오류 발생: {progress.get('error_msg', '')}")
+            st.rerun()
         return
 
     # 진행 중 UI
@@ -1456,14 +1443,30 @@ def main():
         </table>
         """, unsafe_allow_html=True)
 
-        # 각 카테고리별 실시간 진행 fragment
+        # 각 카테고리별 실시간 진행 fragment (완료 시 정적 표시로 폴링 중단)
         prog_col1, prog_col2 = st.columns(2)
         with prog_col1:
-            if scraping_active or scraping_phase in ('done', 'error'):
+            if scraping_active:
                 _render_scraping_progress()
+            elif scraping_phase == 'done':
+                st.success("✅ 스크래핑 완료!")
+            elif scraping_phase == 'error':
+                st.error("❌ 스크래핑 중 오류가 발생했습니다.")
         with prog_col2:
-            if disclosure_active or disclosure_phase in ('done', 'error'):
+            if disclosure_active:
                 _render_disclosure_progress()
+            elif disclosure_phase == 'done':
+                shared = st.session_state.get('_disclosure_shared', {})
+                merge_done = shared.get('merge_done', False)
+                has_delinquency = bool(shared.get('delinquency_data'))
+                if merge_done:
+                    st.success("✅ 공시 다운로드 + 연체율 추출 + merge 완료!")
+                elif has_delinquency:
+                    st.success("✅ 공시 다운로드 + 연체율 추출 완료!")
+                else:
+                    st.success("✅ 공시 다운로드 완료 (연체율 추출 없음)")
+            elif disclosure_phase == 'error':
+                st.error(f"❌ 오류 발생")
 
         st.divider()
 
