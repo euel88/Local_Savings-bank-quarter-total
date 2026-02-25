@@ -2218,15 +2218,16 @@ def _disclosure_worker(shared, save_path=None, selected_banks=None, api_key=None
         if delinquency_data and scraping_ref is not None:
             progress['phase'] = 'merging'
             phase_start = time.time()
-            log_callback(f"[Merge] 스크래핑 완료 대기 중...")
+            log_callback(f"[Merge] 스크래핑 완전 종료 대기 중...")
 
-            # 분기총괄 엑셀이 생성될 때까지 대기 (검증 완료를 기다리지 않음)
+            # Thread A가 완전히 끝날 때까지 대기 (검증 + 최종 저장 포함)
+            # early_path_callback 시점에 merge하면 이후 검증 재저장으로 patch가 소실됨
             waited = 0
-            while not scraping_ref.get('summary_excel_path') and scraping_ref.get('scraping_running', False) and waited < 300:
+            while scraping_ref.get('scraping_running', False) and waited < 600:
                 time.sleep(3)
                 waited += 3
-                if waited % 15 == 0:
-                    log_callback(f"  스크래핑 대기 중... ({waited}초 경과)")
+                if waited % 30 == 0:
+                    log_callback(f"  스크래핑 완료 대기 중... ({waited}초 경과)")
 
             summary_path = scraping_ref.get('summary_excel_path')
             if summary_path and os.path.exists(summary_path):
