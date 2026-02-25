@@ -18,6 +18,7 @@ import threading
 import zipfile
 import base64
 import logging
+import gc
 from datetime import datetime
 
 # ============================================================
@@ -2334,6 +2335,11 @@ def _disclosure_worker(shared, save_path=None, selected_banks=None, api_key=None
 
         # 보고서 생성
         downloader.create_report()
+
+        # Chrome 더 이상 불필요 — ZIP/PDF 작업 전에 메모리 해제
+        downloader.cleanup()
+        gc.collect()
+        log_callback("Chrome 메모리 해제 완료")
 
         # 5-3. 다운로드된 파일 ZIP 압축
         progress['phase'] = 'zipping'
