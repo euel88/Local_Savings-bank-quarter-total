@@ -2220,9 +2220,10 @@ def start_scraping(selected_banks, scrape_type, auto_zip, download_filename, use
         st.session_state.disclosure_running = False
         disclosure_thread = None
 
-    # 두 스레드 동시 시작
+    # 두 스레드 시작 (Chrome 동시 생성 방지를 위해 약간 지연)
     scraping_thread.start()
     if disclosure_thread:
+        time.sleep(2)  # Thread A가 먼저 Chrome 락을 잡도록 양보
         disclosure_thread.start()
 
 
