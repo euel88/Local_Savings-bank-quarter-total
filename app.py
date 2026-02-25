@@ -785,6 +785,12 @@ def _render_disclosure_progress():
     pct = min(current_idx / total, 1.0) if total > 0 else 0
     if phase == 'init':
         phase_text = "📥 공시파일 다운로드 초기화 중..."
+    elif phase == 'waiting_for_scraping':
+        sp = shared.get('_scraping_shared_ref', {}).get('scraping_progress', {})
+        s_cur = sp.get('current_idx', 0)
+        s_tot = sp.get('total_banks', 0)
+        s_bank = sp.get('current_bank', '')
+        phase_text = f"⏳ 스크래핑 완료 대기 중... ({s_cur}/{s_tot} {s_bank})"
     elif phase == 'extracting':
         phase_text = "🌐 웹사이트 접속 및 은행 목록 추출 중..."
     elif phase == 'downloading':
@@ -863,7 +869,9 @@ def _render_global_task_banner():
         dl_start = dl_progress.get('start_time', 0)
         dl_elapsed = time.time() - dl_start if dl_start else 0
 
-        if dl_phase in ('init', 'extracting'):
+        if dl_phase == 'waiting_for_scraping':
+            dl_msg = f"⏳ 스크래핑 완료 대기 중 (메모리 절약)... — ⏱️ {format_elapsed_time(dl_elapsed)}"
+        elif dl_phase in ('init', 'extracting'):
             dl_msg = f"📥 공시 다운로드 준비 중... — ⏱️ {format_elapsed_time(dl_elapsed)}"
         elif dl_phase == 'downloading':
             dl_msg = f"📥 다운로드: **{dl_bank}** ({dl_current}/{dl_total}) — ⏱️ {format_elapsed_time(dl_elapsed)}"
@@ -1313,9 +1321,9 @@ def main():
         dl_phase = dl_progress.get('phase', '')
 
         if is_disclosure:
-            if dl_phase in ('init', 'extracting'):
+            if dl_phase in ('init', 'extracting', 'waiting_for_scraping'):
                 d_badge = '<span class="stat-card-badge badge-amber">준비 중</span>'
-                d_value = "초기화"
+                d_value = "대기 중" if dl_phase == 'waiting_for_scraping' else "초기화"
             else:
                 d_badge = '<span class="stat-card-badge badge-green">진행 중</span>'
                 d_value = f"{dl_current} <span>/ {dl_total}</span>" if dl_total > 0 else "진행 중"
@@ -1537,7 +1545,8 @@ def main():
         if disclosure_active:
             d_status_icon = "🟢"
             d_phase_map = {
-                'init': '초기화 중', 'extracting': '은행 목록 추출',
+                'init': '초기화 중', 'waiting_for_scraping': '스크래핑 대기',
+                'extracting': '은행 목록 추출',
                 'downloading': '다운로드 중', 'zipping': '압축 중',
                 'extracting_pdf': 'PDF 연체율 추출', 'merging': '연체율 merge',
             }
@@ -2257,6 +2266,31 @@ def _disclosure_worker(shared, save_path=None, selected_banks=None, api_key=None
         progress['phase'] = 'init'
         log_callback("공시파일 다운로드 초기화 중...")
 
+        # ── Streamlit Cloud 메모리 절약: Thread A(스크래핑) 완료 대기 ──
+        # 두 Chrome을 동시에 실행하면 메모리 초과로 프로세스가 죽음 (OOM).
+        # Thread A가 모든 은행 스크래핑을 끝내고 Chrome을 닫은 뒤에
+        # Thread B(다운로드)의 Chrome을 시작해야 안전함.
+        if scraping_ref is not None:
+            progress['phase'] = 'waiting_for_scraping'
+            log_callback("[대기] 스크래핑 완료 대기 중 (메모리 절약을 위해 순차 실행)...")
+            waited = 0
+            while scraping_ref.get('scraping_running', False) and waited < 1800:
+                time.sleep(5)
+                waited += 5
+                if waited % 60 == 0:
+                    sp = scraping_ref.get('scraping_progress', {})
+                    phase = sp.get('phase', '')
+                    cur = sp.get('current_idx', 0)
+                    tot = sp.get('total_banks', 0)
+                    log_callback(
+                        f"  스크래핑 진행 중... ({waited}초 경과, "
+                        f"단계: {phase}, {cur}/{tot})"
+                    )
+            if waited >= 1800:
+                log_callback("[대기 타임아웃] 30분 초과 — 다운로드를 강제 시작합니다.")
+            else:
+                log_callback(f"[대기 완료] 스크래핑 종료 확인 ({waited}초 대기), 다운로드 시작")
+
         downloader = DisclosureDownloader(
             download_path=download_path,
             log_callback=log_callback,
@@ -2374,16 +2408,14 @@ def _disclosure_worker(shared, save_path=None, selected_banks=None, api_key=None
         if delinquency_data and scraping_ref is not None:
             progress['phase'] = 'merging'
             phase_start = time.time()
-            log_callback(f"[Merge] 스크래핑 완전 종료 대기 중...")
 
-            # Thread A가 완전히 끝날 때까지 대기 (검증 + 최종 저장 포함)
-            # early_path_callback 시점에 merge하면 이후 검증 재저장으로 patch가 소실됨
-            waited = 0
-            while scraping_ref.get('scraping_running', False) and waited < 600:
-                time.sleep(3)
-                waited += 3
-                if waited % 30 == 0:
-                    log_callback(f"  스크래핑 완료 대기 중... ({waited}초 경과)")
+            # Thread A는 이미 위에서 대기 완료했으므로 여기서는 짧게 확인만
+            if scraping_ref.get('scraping_running', False):
+                log_callback(f"[Merge] 스크래핑 완전 종료 대기 중...")
+                waited = 0
+                while scraping_ref.get('scraping_running', False) and waited < 120:
+                    time.sleep(3)
+                    waited += 3
 
             summary_path = scraping_ref.get('summary_excel_path')
             if summary_path and os.path.exists(summary_path):
