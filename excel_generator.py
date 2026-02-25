@@ -67,7 +67,7 @@ class ExcelGeneratorConfig:
     ]
 
     # ChatGPT API 설정 (엑셀 작업용)
-    OPENAI_MODEL = "gpt-5.2"
+    OPENAI_MODEL = "gpt-5-mini"
     MAX_TOKENS = 4000
     TEMPERATURE = 0.2
 
