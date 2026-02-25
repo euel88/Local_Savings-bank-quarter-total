@@ -174,6 +174,17 @@ def _create_driver_internal():
         options.add_argument('--disable-notifications')
         options.add_argument('--disable-popup-blocking')
 
+        # 메모리 절약 (Streamlit Cloud ~1GB 제한 대응)
+        options.add_argument('--disable-background-networking')
+        options.add_argument('--disable-default-apps')
+        options.add_argument('--disable-sync')
+        options.add_argument('--disable-translate')
+        options.add_argument('--disable-background-timer-throttling')
+        options.add_argument('--renderer-process-limit=1')
+        options.add_argument('--disk-cache-size=0')
+        options.add_argument('--disable-application-cache')
+        options.add_argument('--js-flags=--max-old-space-size=128')
+
         prefs = {
             'profile.default_content_setting_values': {
                 'images': 2,  # 이미지 로딩 비활성화 (속도 향상)
@@ -225,6 +236,30 @@ def _create_driver_internal():
 
         driver.set_page_load_timeout(30)
         return driver
+
+
+def _cleanup_driver(driver):
+    """Chrome 드라이버를 종료하고 임시 프로필 디렉토리를 정리"""
+    if not driver:
+        return
+    user_data_dir = None
+    try:
+        for arg in driver.options.arguments:
+            if arg.startswith('--user-data-dir='):
+                user_data_dir = arg.split('=', 1)[1]
+                break
+    except Exception:
+        pass
+    try:
+        driver.quit()
+    except Exception:
+        pass
+    if user_data_dir and os.path.exists(user_data_dir):
+        import shutil
+        try:
+            shutil.rmtree(user_data_dir, ignore_errors=True)
+        except Exception:
+            pass
 
 
 class BankScraper:
@@ -449,14 +484,19 @@ class BankScraper:
         except Exception as e:
             return []
 
-    def scrape_bank(self, bank_name, progress_callback=None):
-        """단일 은행 데이터 스크래핑 - 날짜 정보도 반환"""
-        driver = None
+    def scrape_bank(self, bank_name, progress_callback=None, driver=None):
+        """단일 은행 데이터 스크래핑 - 날짜 정보도 반환
+
+        Args:
+            driver: 외부에서 전달된 Chrome 드라이버 (None이면 내부에서 생성/종료)
+        """
+        own_driver = driver is None
         date_info = "날짜 정보 없음"
 
         try:
             self.logger.log_message(f"[시작] {bank_name} 은행 스크래핑")
-            driver = create_driver(logger=self.logger)
+            if own_driver:
+                driver = create_driver(logger=self.logger)
 
             if not self.select_bank(driver, bank_name):
                 self.logger.log_message(f"{bank_name} 선택 실패")
@@ -510,24 +550,9 @@ class BankScraper:
             self.logger.log_message(f"{bank_name} 스크래핑 오류: {str(e)}")
             return None, False, date_info
         finally:
-            if driver:
-                # user-data-dir 경로 보존 후 드라이버 종료
-                user_data_dir = None
-                for arg in driver.options.arguments:
-                    if arg.startswith('--user-data-dir='):
-                        user_data_dir = arg.split('=', 1)[1]
-                        break
-                try:
-                    driver.quit()
-                except:
-                    pass
-                # Chrome 임시 프로필 정리
-                if user_data_dir and os.path.exists(user_data_dir):
-                    import shutil
-                    try:
-                        shutil.rmtree(user_data_dir, ignore_errors=True)
-                    except:
-                        pass
+            # 외부 드라이버는 호출자가 관리 — 여기서 종료하지 않음
+            if own_driver and driver:
+                _cleanup_driver(driver)
 
     def scrape_multiple_banks(self, banks, progress_callback=None):
         """여러 은행 스크래핑"""
