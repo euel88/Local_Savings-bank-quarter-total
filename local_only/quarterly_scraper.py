@@ -34,6 +34,7 @@ import io
 from contextlib import contextmanager
 from pathlib import Path
 import threading
+import queue
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 from tqdm import tqdm
@@ -336,7 +337,7 @@ class DriverManager:
         self.logger = logger
         self.max_drivers = config.MAX_WORKERS
         self.drivers = []
-        self.available_drivers = []
+        self._driver_queue = queue.Queue()
         
     def initialize_drivers(self):
         """드라이버 풀 초기화"""
@@ -356,13 +357,13 @@ class DriverManager:
             try:
                 first_driver = self.create_driver()
                 self.drivers.append(first_driver)
-                self.available_drivers.append(first_driver)
-                
+                self._driver_queue.put(first_driver)
+
                 # 나머지 드라이버 생성
                 for _ in range(self.max_drivers - 1):
                     driver = self.create_driver()
                     self.drivers.append(driver)
-                    self.available_drivers.append(driver)
+                    self._driver_queue.put(driver)
                     
             except Exception as e:
                 self.logger.log_message(f"드라이버 초기화 중 오류 발생: {str(e)}")
@@ -475,33 +476,32 @@ class DriverManager:
             return driver
     
     def get_driver(self):
-        """사용 가능한 드라이버를 가져옵니다."""
-        if not self.available_drivers:
-            self.logger.log_message("모든 드라이버가 사용 중입니다. 대기 중...", verbose=False)
-            time.sleep(1)  # 잠시 대기 후 재시도
-            return self.get_driver()
-        
-        driver = self.available_drivers.pop(0)
-        return driver
+        """사용 가능한 드라이버를 가져옵니다 (Queue 기반 블로킹 대기)."""
+        try:
+            driver = self._driver_queue.get(timeout=120)
+            return driver
+        except queue.Empty:
+            self.logger.log_message("드라이버 대기 타임아웃 (120초)", verbose=True)
+            raise RuntimeError("드라이버 풀에서 사용 가능한 드라이버를 가져올 수 없습니다.")
     
     def return_driver(self, driver):
         """드라이버를 풀에 반환합니다."""
-        if driver in self.drivers and driver not in self.available_drivers:
+        if driver in self.drivers:
             try:
                 # 드라이버 상태 확인
                 driver.current_url  # 접근 가능한지 확인
-                self.available_drivers.append(driver)
+                self._driver_queue.put(driver)
             except:
                 # 오류 발생 시 해당 드라이버를 종료하고 새 드라이버 생성
                 try:
                     driver.quit()
                 except:
                     pass
-                
+
                 self.drivers.remove(driver)
                 new_driver = self.create_driver()
                 self.drivers.append(new_driver)
-                self.available_drivers.append(new_driver)
+                self._driver_queue.put(new_driver)
     
     def close_all(self):
         """모든 드라이버를 종료합니다."""
@@ -511,7 +511,12 @@ class DriverManager:
             except:
                 pass
         self.drivers = []
-        self.available_drivers = []
+        # Queue 비우기
+        while not self._driver_queue.empty():
+            try:
+                self._driver_queue.get_nowait()
+            except queue.Empty:
+                break
 
 
 # 진행 상황 관리 클래스
@@ -942,8 +947,8 @@ class BankScraper:
             
             # 페이지 로딩 완료 대기
             WaitUtils.wait_for_page_load(driver, self.config.PAGE_LOAD_TIMEOUT)
-            WaitUtils.wait_with_random(0.5, 1)
-            
+            WaitUtils.wait_with_random(0.3, 0.5)
+
             # 특수 케이스 처리를 위한 정확한 은행명 목록 (JT친애 추가)
             exact_bank_names = {
                 "키움": ["키움", "키움저축은행"],
@@ -1011,8 +1016,8 @@ class BankScraper:
             result = driver.execute_script(js_script)
             if result:
                 self.logger.log_message(f"{bank_name} 은행: {result}", verbose=False)
-                WaitUtils.wait_with_random(1, 1.5)  # 페이지 전환 대기 시간 증가
-                
+                WaitUtils.wait_with_random(0.5, 0.8)  # 페이지 전환 대기
+
                 # 페이지 전환 확인
                 current_url = driver.current_url
                 if current_url != self.config.BASE_URL:
@@ -1035,10 +1040,10 @@ class BankScraper:
                         try:
                             if element.is_displayed():
                                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
-                                WaitUtils.wait_with_random(0.3, 0.5)
+                                WaitUtils.wait_with_random(0.2, 0.3)
                                 driver.execute_script("arguments[0].click();", element)
-                                WaitUtils.wait_with_random(1, 1.5)
-                                
+                                WaitUtils.wait_with_random(0.5, 0.8)
+
                                 # 페이지 전환 확인
                                 if driver.current_url != self.config.BASE_URL:
                                     return True
@@ -1070,13 +1075,13 @@ class BankScraper:
                     try:
                         if element.is_displayed():
                             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
-                            WaitUtils.wait_with_random(0.3, 0.5)
+                            WaitUtils.wait_with_random(0.1, 0.2)
                             driver.execute_script("arguments[0].click();", element)
-                            WaitUtils.wait_with_random(0.5, 1)
+                            WaitUtils.wait_with_random(0.3, 0.5)
                             return True
                     except:
                         continue
-            
+
             # 방법 2: JavaScript로 카테고리 탭 클릭
             category_indices = {
                 "영업개황": 0,
@@ -1138,35 +1143,35 @@ class BankScraper:
                 result = driver.execute_script(script)
                 if result:
                     self.logger.log_message(f"{category} 탭: {result} 성공", verbose=False)
-                    WaitUtils.wait_with_random(0.5, 1)
+                    WaitUtils.wait_with_random(0.3, 0.5)
                     return True
-            
+
             # 방법 3: 포함 문자열로 검색 (더 관대한 매칭)
             tab_broad_xpath = f"//*[contains(text(), '{category}')]"
             elements = driver.find_elements(By.XPATH, tab_broad_xpath)
-            
+
             for element in elements:
                 try:
                     if element.is_displayed() and (element.tag_name in ['a', 'li', 'span', 'button', 'div']):
                         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
-                        WaitUtils.wait_with_random(0.3, 0.5)
+                        WaitUtils.wait_with_random(0.1, 0.2)
                         driver.execute_script("arguments[0].click();", element)
-                        WaitUtils.wait_with_random(0.5, 1)
+                        WaitUtils.wait_with_random(0.3, 0.5)
                         return True
                 except:
                     continue
-            
+
             # 방법 4: CSS 선택자 시도
             tab_css = f"[role='tab'], .tab, .tab-item, .tabs li, .tabs a, nav a, ul li a"
             tabs = driver.find_elements(By.CSS_SELECTOR, tab_css)
-            
+
             for tab in tabs:
                 try:
                     if category in tab.text and tab.is_displayed():
                         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", tab)
-                        WaitUtils.wait_with_random(0.3, 0.5)
+                        WaitUtils.wait_with_random(0.1, 0.2)
                         driver.execute_script("arguments[0].click();", tab)
-                        WaitUtils.wait_with_random(0.5, 1)
+                        WaitUtils.wait_with_random(0.3, 0.5)
                         return True
                 except:
                     continue
@@ -1183,7 +1188,7 @@ class BankScraper:
         try:
             # 페이지가 완전히 로드될 때까지 대기
             WaitUtils.wait_for_page_load(driver, self.config.PAGE_LOAD_TIMEOUT)
-            WaitUtils.wait_with_random(0.5, 1)
+            WaitUtils.wait_with_random(0.3, 0.5)
             
             # 방법 1: pandas로 테이블 추출
             try:
@@ -1579,7 +1584,7 @@ class BankScraper:
                     else:
                         if attempt < self.config.MAX_RETRIES - 1:
                             self.logger.log_message(f"{bank_name} 은행 데이터 스크래핑 실패, 재시도 {attempt+1}/{self.config.MAX_RETRIES}...")
-                            WaitUtils.wait_with_random(1, 2)  # 재시도 전 잠시 대기
+                            WaitUtils.wait_with_random(0.3, 0.5)  # 재시도 전 잠시 대기
                             
                             # 진행 상황 업데이트
                             if progress_callback:
@@ -1594,7 +1599,7 @@ class BankScraper:
                 except Exception as e:
                     if attempt < self.config.MAX_RETRIES - 1:
                         self.logger.log_message(f"{bank_name} 은행 처리 중 오류: {str(e)}, 재시도 {attempt+1}/{self.config.MAX_RETRIES}...")
-                        WaitUtils.wait_with_random(1, 2)
+                        WaitUtils.wait_with_random(0.3, 0.5)
                         
                         # 진행 상황 업데이트
                         if progress_callback:

@@ -59,8 +59,8 @@ class Config:
     QUARTERLY_URL = "https://www.fsb.or.kr/busmagequar_0100.act"  # 분기공시 URL
     SETTLEMENT_URL = "https://www.fsb.or.kr/busmagesett_0100.act"  # 결산공시 URL
     MAX_RETRIES = 2
-    PAGE_LOAD_TIMEOUT = 30
-    WAIT_TIMEOUT = 10
+    PAGE_LOAD_TIMEOUT = 15
+    WAIT_TIMEOUT = 8
     MAX_WORKERS = 3
 
     # 전체 79개 저축은행 목록
@@ -214,7 +214,7 @@ def _create_driver_internal():
             except Exception:
                 driver = webdriver.Chrome(options=options)
 
-        driver.set_page_load_timeout(30)
+        driver.set_page_load_timeout(15)
         return driver
 
 
@@ -301,7 +301,7 @@ class BankScraper:
                 self.logger.log_message(f"{bank_name} 선택 실패: 페이지 로드 안 됨")
                 return False
 
-            WaitUtils.wait_with_random(0.5, 1)
+            WaitUtils.wait_with_random(0.3, 0.5)
 
             # 은행명 매핑
             exact_bank_names = {
@@ -360,7 +360,7 @@ class BankScraper:
 
             result = driver.execute_script(js_script)
             if result:
-                WaitUtils.wait_with_random(1, 1.5)
+                WaitUtils.wait_with_random(0.5, 0.8)
                 if driver.current_url != self.config.BASE_URL:
                     return True
 
@@ -395,7 +395,7 @@ class BankScraper:
 
                 result = driver.execute_script(script)
                 if result:
-                    WaitUtils.wait_with_random(0.5, 1)
+                    WaitUtils.wait_with_random(0.3, 0.5)
                     return True
 
             return False
@@ -407,7 +407,7 @@ class BankScraper:
         """페이지에서 테이블을 추출합니다."""
         try:
             WaitUtils.wait_for_page_load(driver, self.config.PAGE_LOAD_TIMEOUT)
-            WaitUtils.wait_with_random(0.5, 1)
+            WaitUtils.wait_with_random(0.3, 0.5)
 
             html_source = driver.page_source
             dfs = pd.read_html(StringIO(html_source))
@@ -542,7 +542,7 @@ class BankScraper:
                 progress_callback(bank, status)
 
             # 은행 간 딜레이
-            WaitUtils.wait_with_random(1, 2)
+            WaitUtils.wait_with_random(0.2, 0.4)
 
         return results
 
