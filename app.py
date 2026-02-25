@@ -822,7 +822,7 @@ def _render_disclosure_progress():
         st.caption(f"현재까지: 성공 {success}개 / 실패 {fail}개 / 전체 {total}개")
 
 
-@st.fragment(run_every=3)
+@st.fragment(run_every=10)
 def _render_global_task_banner():
     """페이지와 관계없이 표시되는 작업 진행 배너 (스크래핑 + 다운로드 각각 표시)"""
     # --- 스크래핑 배너 ---

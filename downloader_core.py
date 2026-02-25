@@ -246,6 +246,7 @@ class DisclosureDownloader:
             driver = webdriver.Chrome(options=chrome_options)
 
         driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
+        driver.set_script_timeout(30)  # execute_script 무한 행 방지
         driver.implicitly_wait(10)
 
         # Chrome DevTools Protocol 다운로드 설정
@@ -829,13 +830,35 @@ class DisclosureDownloader:
         self.log("다운로드 중단 요청됨...")
 
     def cleanup(self):
-        """리소스 정리"""
+        """리소스 정리 — 좀비 Chrome 프로세스까지 강제 종료"""
+        chrome_pid = None
         if self.driver:
+            # 드라이버 PID 확보 (quit 실패 시 강제 종료용)
+            try:
+                if self.driver.service and self.driver.service.process:
+                    chrome_pid = self.driver.service.process.pid
+            except Exception:
+                pass
             try:
                 self.driver.quit()
             except Exception:
                 pass
             self.driver = None
+        # 좀비 프로세스 강제 종료
+        if chrome_pid:
+            try:
+                parent = psutil.Process(chrome_pid)
+                for child in parent.children(recursive=True):
+                    try:
+                        child.kill()
+                    except Exception:
+                        pass
+                try:
+                    parent.kill()
+                except Exception:
+                    pass
+            except Exception:
+                pass
         # Chrome 임시 프로필 디렉토리 정리
         chrome_dir = getattr(self, '_chrome_user_data_dir', None)
         if chrome_dir and os.path.exists(chrome_dir):

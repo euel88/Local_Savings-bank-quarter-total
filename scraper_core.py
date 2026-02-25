@@ -10,6 +10,8 @@ import random
 import json
 import re
 import zipfile
+import atexit
+import signal
 from datetime import datetime
 from io import StringIO
 import io
@@ -29,6 +31,37 @@ import pandas as pd
 import warnings
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+
+def _kill_all_chrome_processes():
+    """프로세스 종료 시 모든 Chrome/chromedriver 좀비를 강제 종료"""
+    try:
+        import psutil
+        current_pid = os.getpid()
+        for proc in psutil.process_iter(['pid', 'name', 'ppid']):
+            try:
+                name = (proc.info.get('name') or '').lower()
+                if any(n in name for n in ('chrom', 'chromedriver')):
+                    # 현재 프로세스의 자식만 종료
+                    if proc.info.get('ppid') == current_pid or proc.ppid() == current_pid:
+                        proc.kill()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+atexit.register(_kill_all_chrome_processes)
+
+# SIGTERM 수신 시에도 Chrome 정리 (Streamlit Cloud가 컨테이너 종료 시 발송)
+def _sigterm_handler(signum, frame):
+    _kill_all_chrome_processes()
+    sys.exit(0)
+
+try:
+    signal.signal(signal.SIGTERM, _sigterm_handler)
+except Exception:
+    pass  # 메인 스레드가 아닌 경우 무시
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
@@ -99,7 +132,7 @@ class WaitUtils:
                 lambda d: d.execute_script('return document.readyState') == 'complete'
             )
             return True
-        except:
+        except Exception:
             return False
 
     @staticmethod
@@ -245,10 +278,11 @@ def _create_driver_internal():
                 from webdriver_manager.core.os_manager import ChromeType
                 service = Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
                 driver = webdriver.Chrome(service=service, options=options)
-            except:
+            except Exception:
                 driver = webdriver.Chrome(options=options)
 
         driver.set_page_load_timeout(30)
+        driver.set_script_timeout(30)  # execute_script 무한 행 방지
         return driver
 
 
@@ -262,9 +296,10 @@ def _release_dom_memory(driver):
 
 
 def _cleanup_driver(driver):
-    """Chrome 드라이버를 종료하고 임시 프로필 디렉토리를 정리"""
+    """Chrome 드라이버를 종료하고 좀비 프로세스/임시 디렉토리를 확실히 정리"""
     if not driver:
         return
+    # 1. user-data-dir 경로 추출
     user_data_dir = None
     try:
         for arg in driver.options.arguments:
@@ -273,10 +308,45 @@ def _cleanup_driver(driver):
                 break
     except Exception:
         pass
+
+    # 2. Chrome 프로세스 PID 확보 (quit 실패 시 강제 종료용)
+    chrome_pid = None
+    try:
+        if driver.service and driver.service.process:
+            chrome_pid = driver.service.process.pid
+    except Exception:
+        pass
+
+    # 3. 정상 종료 시도
     try:
         driver.quit()
     except Exception:
         pass
+
+    # 4. 좀비 프로세스 강제 종료 (driver.quit 실패 시)
+    if chrome_pid:
+        try:
+            import psutil
+            parent = psutil.Process(chrome_pid)
+            children = parent.children(recursive=True)
+            for child in children:
+                try:
+                    child.kill()
+                except Exception:
+                    pass
+            try:
+                parent.kill()
+            except Exception:
+                pass
+        except Exception:
+            # psutil 실패 시 os.kill 폴백
+            try:
+                import signal as _sig
+                os.kill(chrome_pid, _sig.SIGKILL)
+            except Exception:
+                pass
+
+    # 5. 임시 프로필 디렉토리 정리
     if user_data_dir and os.path.exists(user_data_dir):
         import shutil
         try:
