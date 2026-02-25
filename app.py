@@ -146,7 +146,8 @@ st.set_page_config(
 try:
     from scraper_core import (
         Config, BankScraper, StreamlitLogger,
-        create_summary_dataframe
+        create_summary_dataframe,
+        create_driver, _cleanup_driver,
     )
     SCRAPER_AVAILABLE = True
 except ImportError as e:
@@ -785,6 +786,12 @@ def _render_disclosure_progress():
     pct = min(current_idx / total, 1.0) if total > 0 else 0
     if phase == 'init':
         phase_text = "📥 공시파일 다운로드 초기화 중..."
+    elif phase == 'waiting_for_scraping':
+        sp = shared.get('_scraping_shared_ref', {}).get('scraping_progress', {})
+        s_cur = sp.get('current_idx', 0)
+        s_tot = sp.get('total_banks', 0)
+        s_bank = sp.get('current_bank', '')
+        phase_text = f"⏳ 스크래핑 완료 대기 중... ({s_cur}/{s_tot} {s_bank})"
     elif phase == 'extracting':
         phase_text = "🌐 웹사이트 접속 및 은행 목록 추출 중..."
     elif phase == 'downloading':
@@ -863,7 +870,9 @@ def _render_global_task_banner():
         dl_start = dl_progress.get('start_time', 0)
         dl_elapsed = time.time() - dl_start if dl_start else 0
 
-        if dl_phase in ('init', 'extracting'):
+        if dl_phase == 'waiting_for_scraping':
+            dl_msg = f"⏳ 스크래핑 완료 대기 중 (메모리 절약)... — ⏱️ {format_elapsed_time(dl_elapsed)}"
+        elif dl_phase in ('init', 'extracting'):
             dl_msg = f"📥 공시 다운로드 준비 중... — ⏱️ {format_elapsed_time(dl_elapsed)}"
         elif dl_phase == 'downloading':
             dl_msg = f"📥 다운로드: **{dl_bank}** ({dl_current}/{dl_total}) — ⏱️ {format_elapsed_time(dl_elapsed)}"
@@ -1313,9 +1322,9 @@ def main():
         dl_phase = dl_progress.get('phase', '')
 
         if is_disclosure:
-            if dl_phase in ('init', 'extracting'):
+            if dl_phase in ('init', 'extracting', 'waiting_for_scraping'):
                 d_badge = '<span class="stat-card-badge badge-amber">준비 중</span>'
-                d_value = "초기화"
+                d_value = "대기 중" if dl_phase == 'waiting_for_scraping' else "초기화"
             else:
                 d_badge = '<span class="stat-card-badge badge-green">진행 중</span>'
                 d_value = f"{dl_current} <span>/ {dl_total}</span>" if dl_total > 0 else "진행 중"
@@ -1537,7 +1546,8 @@ def main():
         if disclosure_active:
             d_status_icon = "🟢"
             d_phase_map = {
-                'init': '초기화 중', 'extracting': '은행 목록 추출',
+                'init': '초기화 중', 'waiting_for_scraping': '스크래핑 대기',
+                'extracting': '은행 목록 추출',
                 'downloading': '다운로드 중', 'zipping': '압축 중',
                 'extracting_pdf': 'PDF 연체율 추출', 'merging': '연체율 merge',
             }
@@ -1933,96 +1943,116 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
         _sync_logs(logger)
         phase_start = time.time()
 
-        for idx, bank in enumerate(selected_banks):
-            progress['current_bank'] = bank
-            progress['current_idx'] = idx + 1
-
-            elapsed = time.time() - start_time
-            shared['elapsed_time'] = elapsed
-
-            bank_start = time.time()
-            filepath, success, date_info = scraper.scrape_bank(bank)
-            bank_elapsed = time.time() - bank_start
-
-            result = {
-                'bank': bank,
-                'success': success,
-                'filepath': filepath,
-                'date_info': date_info
-            }
-            results.append(result)
-            bank_dates[bank] = date_info
-
-            progress['partial_results'] = list(results)
-
-            status = "✅" if success else "❌"
-            msg = f"  {status} {bank} ({bank_elapsed:.1f}초) - 공시일: {date_info}"
-            logger.log_message(msg)
-            if log_file:
-                _append_log_to_file(log_file, msg)
-            _sync_logs(logger)
-
-        scrape_elapsed = _elapsed(phase_start)
-        success_count = sum(1 for r in results if r.get('success'))
-        msg = f"[1단계 완료] 스크래핑 {scrape_elapsed} (성공 {success_count}/{total_banks})"
-        logger.log_message(msg)
-        if log_file:
-            _append_log_to_file(log_file, msg)
-        _sync_logs(logger)
-
-        # ========== 실패 은행 자동 재시도 ==========
-        MAX_RETRY_ROUNDS = 2
-        for retry_round in range(1, MAX_RETRY_ROUNDS + 1):
-            failed_indices = [i for i, r in enumerate(results) if not r.get('success')]
-            if not failed_indices:
-                break
-
-            failed_banks = [results[i]['bank'] for i in failed_indices]
-            retry_msg = (
-                f"\n{'='*50}\n"
-                f"[재시도 {retry_round}/{MAX_RETRY_ROUNDS}] "
-                f"실패 은행 {len(failed_banks)}개: {', '.join(failed_banks)}\n"
-                f"{'='*50}"
-            )
-            logger.log_message(retry_msg)
-            if log_file:
-                _append_log_to_file(log_file, retry_msg)
-            _sync_logs(logger)
-
-            progress['phase'] = 'retrying'
-            progress['retry_round'] = retry_round
-            progress['retry_total_rounds'] = MAX_RETRY_ROUNDS
-            progress['total_banks'] = len(failed_banks)
-
-            for retry_idx, orig_idx in enumerate(failed_indices):
-                bank = results[orig_idx]['bank']
+        # ── Chrome 1회 생성 → 79개 은행 재사용 (기존: 은행마다 생성/종료) ──
+        driver = create_driver(logger=logger)
+        try:
+            for idx, bank in enumerate(selected_banks):
                 progress['current_bank'] = bank
-                progress['current_idx'] = retry_idx + 1
+                progress['current_idx'] = idx + 1
 
                 elapsed = time.time() - start_time
                 shared['elapsed_time'] = elapsed
 
                 bank_start = time.time()
-                filepath, success, date_info = scraper.scrape_bank(bank)
+                try:
+                    filepath, success, date_info = scraper.scrape_bank(bank, driver=driver)
+                except Exception as e:
+                    # 드라이버 세션이 죽은 경우 재생성
+                    logger.log_message(f"  ⚠️ 드라이버 오류, 재생성: {str(e)[:50]}")
+                    _cleanup_driver(driver)
+                    driver = create_driver(logger=logger)
+                    filepath, success, date_info = scraper.scrape_bank(bank, driver=driver)
                 bank_elapsed = time.time() - bank_start
 
-                if success:
-                    results[orig_idx] = {
-                        'bank': bank,
-                        'success': True,
-                        'filepath': filepath,
-                        'date_info': date_info
-                    }
-                    bank_dates[bank] = date_info
-                    msg = f"  ✅ [재시도 성공] {bank} ({bank_elapsed:.1f}초)"
-                else:
-                    msg = f"  ❌ [재시도 실패] {bank} ({bank_elapsed:.1f}초)"
+                result = {
+                    'bank': bank,
+                    'success': success,
+                    'filepath': filepath,
+                    'date_info': date_info
+                }
+                results.append(result)
+                bank_dates[bank] = date_info
+
+                progress['partial_results'] = list(results)
+
+                status = "✅" if success else "❌"
+                msg = f"  {status} {bank} ({bank_elapsed:.1f}초) - 공시일: {date_info}"
                 logger.log_message(msg)
                 if log_file:
                     _append_log_to_file(log_file, msg)
-
-                progress['partial_results'] = list(results)
                 _sync_logs(logger)
+
+            scrape_elapsed = _elapsed(phase_start)
+            success_count = sum(1 for r in results if r.get('success'))
+            msg = f"[1단계 완료] 스크래핑 {scrape_elapsed} (성공 {success_count}/{total_banks})"
+            logger.log_message(msg)
+            if log_file:
+                _append_log_to_file(log_file, msg)
+            _sync_logs(logger)
+
+            # ========== 실패 은행 자동 재시도 ==========
+            MAX_RETRY_ROUNDS = 2
+            for retry_round in range(1, MAX_RETRY_ROUNDS + 1):
+                failed_indices = [i for i, r in enumerate(results) if not r.get('success')]
+                if not failed_indices:
+                    break
+
+                failed_banks = [results[i]['bank'] for i in failed_indices]
+                retry_msg = (
+                    f"\n{'='*50}\n"
+                    f"[재시도 {retry_round}/{MAX_RETRY_ROUNDS}] "
+                    f"실패 은행 {len(failed_banks)}개: {', '.join(failed_banks)}\n"
+                    f"{'='*50}"
+                )
+                logger.log_message(retry_msg)
+                if log_file:
+                    _append_log_to_file(log_file, retry_msg)
+                _sync_logs(logger)
+
+                progress['phase'] = 'retrying'
+                progress['retry_round'] = retry_round
+                progress['retry_total_rounds'] = MAX_RETRY_ROUNDS
+                progress['total_banks'] = len(failed_banks)
+
+                for retry_idx, orig_idx in enumerate(failed_indices):
+                    bank = results[orig_idx]['bank']
+                    progress['current_bank'] = bank
+                    progress['current_idx'] = retry_idx + 1
+
+                    elapsed = time.time() - start_time
+                    shared['elapsed_time'] = elapsed
+
+                    bank_start = time.time()
+                    try:
+                        filepath, success, date_info = scraper.scrape_bank(bank, driver=driver)
+                    except Exception:
+                        _cleanup_driver(driver)
+                        driver = create_driver(logger=logger)
+                        filepath, success, date_info = scraper.scrape_bank(bank, driver=driver)
+                    bank_elapsed = time.time() - bank_start
+
+                    if success:
+                        results[orig_idx] = {
+                            'bank': bank,
+                            'success': True,
+                            'filepath': filepath,
+                            'date_info': date_info
+                        }
+                        bank_dates[bank] = date_info
+                        msg = f"  ✅ [재시도 성공] {bank} ({bank_elapsed:.1f}초)"
+                    else:
+                        msg = f"  ❌ [재시도 실패] {bank} ({bank_elapsed:.1f}초)"
+                    logger.log_message(msg)
+                    if log_file:
+                        _append_log_to_file(log_file, msg)
+
+                    progress['partial_results'] = list(results)
+                    _sync_logs(logger)
+
+        finally:
+            # 스크래핑+재시도 완료 → Chrome 종료, Thread B에 신호
+            _cleanup_driver(driver)
+            shared['chrome_phase_done'] = True
 
         # 최종 실패 은행 로그
         final_failed = [r['bank'] for r in results if not r.get('success')]
@@ -2156,6 +2186,7 @@ def start_scraping(selected_banks, scrape_type, auto_zip, download_filename, use
     # --- Thread A: 스크래핑 (1~4단계) ---
     scraping_shared = {
         'scraping_running': True,
+        'chrome_phase_done': False,
         'results': [],
         'logs': [],
         'bank_dates': {},
@@ -2256,6 +2287,30 @@ def _disclosure_worker(shared, save_path=None, selected_banks=None, api_key=None
 
         progress['phase'] = 'init'
         log_callback("공시파일 다운로드 초기화 중...")
+
+        # ── Thread A의 Chrome 사용 구간만 대기 (ZIP/AI Excel과는 병렬 실행) ──
+        # Thread A가 스크래핑+재시도를 마치고 Chrome을 닫으면 chrome_phase_done=True.
+        # 그 이후의 ZIP 압축, AI 엑셀 생성은 Chrome을 안 쓰므로 동시 진행 가능.
+        if scraping_ref is not None and not scraping_ref.get('chrome_phase_done', False):
+            progress['phase'] = 'waiting_for_scraping'
+            log_callback("[대기] 스크래핑 Chrome 종료 대기 중 (메모리 절약)...")
+            waited = 0
+            while not scraping_ref.get('chrome_phase_done', False) and waited < 1800:
+                time.sleep(5)
+                waited += 5
+                if waited % 60 == 0:
+                    sp = scraping_ref.get('scraping_progress', {})
+                    phase = sp.get('phase', '')
+                    cur = sp.get('current_idx', 0)
+                    tot = sp.get('total_banks', 0)
+                    log_callback(
+                        f"  스크래핑 진행 중... ({waited}초 경과, "
+                        f"단계: {phase}, {cur}/{tot})"
+                    )
+            if waited >= 1800:
+                log_callback("[대기 타임아웃] 30분 초과 — 다운로드를 강제 시작합니다.")
+            elif waited > 0:
+                log_callback(f"[대기 완료] 스크래핑 Chrome 종료 확인 ({waited}초 대기), 다운로드 시작")
 
         downloader = DisclosureDownloader(
             download_path=download_path,
@@ -2374,16 +2429,16 @@ def _disclosure_worker(shared, save_path=None, selected_banks=None, api_key=None
         if delinquency_data and scraping_ref is not None:
             progress['phase'] = 'merging'
             phase_start = time.time()
-            log_callback(f"[Merge] 스크래핑 완전 종료 대기 중...")
 
-            # Thread A가 완전히 끝날 때까지 대기 (검증 + 최종 저장 포함)
-            # early_path_callback 시점에 merge하면 이후 검증 재저장으로 patch가 소실됨
-            waited = 0
-            while scraping_ref.get('scraping_running', False) and waited < 600:
-                time.sleep(3)
-                waited += 3
-                if waited % 30 == 0:
-                    log_callback(f"  스크래핑 완료 대기 중... ({waited}초 경과)")
+            # Thread A의 AI Excel 생성 완료 대기 (Chrome은 이미 종료됨)
+            if scraping_ref.get('scraping_running', False):
+                log_callback(f"[Merge] AI 엑셀 생성 완료 대기 중...")
+                waited = 0
+                while scraping_ref.get('scraping_running', False) and waited < 600:
+                    time.sleep(3)
+                    waited += 3
+                    if waited % 30 == 0:
+                        log_callback(f"  AI 엑셀 생성 대기 중... ({waited}초 경과)")
 
             summary_path = scraping_ref.get('summary_excel_path')
             if summary_path and os.path.exists(summary_path):
