@@ -147,7 +147,6 @@ try:
     from scraper_core import (
         Config, BankScraper, StreamlitLogger,
         create_summary_dataframe,
-        create_driver, _cleanup_driver,
     )
     SCRAPER_AVAILABLE = True
 except ImportError as e:
@@ -1931,172 +1930,104 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
         results = []
         bank_dates = {}
 
-        # 메모리 상태 로깅
-        _mem_info = ""
-        try:
-            import psutil
-            mem = psutil.virtual_memory()
-            _mem_info = f" | 메모리: {mem.percent}% ({mem.used // (1024*1024)}MB / {mem.total // (1024*1024)}MB)"
-        except Exception:
-            pass
-
         logger.log_message(f"{'='*50}")
-        logger.log_message(f"[1단계] 스크래핑 시작 ({total_banks}개 은행){_mem_info}")
+        logger.log_message(f"[1단계] 스크래핑 시작 ({total_banks}개 은행)")
         logger.log_message(f"{'='*50}")
         if log_file:
             _append_log_to_file(log_file, f"[스크래핑] 시작 ({total_banks}개 은행)")
         _sync_logs(logger)
         phase_start = time.time()
 
-        # ── Chrome 재활용 전략 ──
-        # 10개 은행마다 or 메모리 75% 초과 시 Chrome 재시작 (DOM 누적 메모리 방지)
-        _RECYCLE_EVERY = 10
-        _MEMORY_RECYCLE_THRESHOLD = 75  # percent
+        for idx, bank in enumerate(selected_banks):
+            progress['current_bank'] = bank
+            progress['current_idx'] = idx + 1
 
-        def _should_recycle(idx):
-            """주기적 또는 메모리 기반 재활용 판단"""
-            if idx > 0 and idx % _RECYCLE_EVERY == 0:
-                return True, "주기적"
-            try:
-                import psutil
-                if psutil.virtual_memory().percent > _MEMORY_RECYCLE_THRESHOLD:
-                    return True, "메모리 초과"
-            except Exception:
-                pass
-            return False, ""
+            elapsed = time.time() - start_time
+            shared['elapsed_time'] = elapsed
 
-        def _recycle_chrome(driver, idx, reason=""):
-            """Chrome 재활용: 종료 → GC → 재생성"""
-            _cleanup_driver(driver)
-            import gc; gc.collect()
-            _mem_log = ""
-            try:
-                import psutil
-                mem = psutil.virtual_memory()
-                _mem_log = f" (메모리: {mem.percent}%, {mem.available // (1024*1024)}MB 여유)"
-            except Exception:
-                pass
-            logger.log_message(f"  🔄 Chrome 재활용 [{reason}] ({idx}/{total_banks}){_mem_log}")
-            _sync_logs(logger)
-            return create_driver(logger=logger)
+            bank_start = time.time()
+            filepath, success, date_info = scraper.scrape_bank(bank)
+            bank_elapsed = time.time() - bank_start
 
-        driver = create_driver(logger=logger)
-        try:
-            for idx, bank in enumerate(selected_banks):
-                progress['current_bank'] = bank
-                progress['current_idx'] = idx + 1
+            result = {
+                'bank': bank,
+                'success': success,
+                'filepath': filepath,
+                'date_info': date_info
+            }
+            results.append(result)
+            bank_dates[bank] = date_info
 
-                elapsed = time.time() - start_time
-                shared['elapsed_time'] = elapsed
+            progress['partial_results'] = list(results)
 
-                # 주기적 또는 메모리 기반 Chrome 재활용
-                need_recycle, reason = _should_recycle(idx)
-                if need_recycle:
-                    driver = _recycle_chrome(driver, idx, reason)
-
-                bank_start = time.time()
-                try:
-                    filepath, success, date_info = scraper.scrape_bank(bank, driver=driver)
-                except Exception as e:
-                    # 드라이버 세션이 죽은 경우 재생성
-                    logger.log_message(f"  ⚠️ 드라이버 오류, 재생성: {str(e)[:50]}")
-                    _cleanup_driver(driver)
-                    import gc; gc.collect()
-                    driver = create_driver(logger=logger)
-                    filepath, success, date_info = scraper.scrape_bank(bank, driver=driver)
-                bank_elapsed = time.time() - bank_start
-
-                result = {
-                    'bank': bank,
-                    'success': success,
-                    'filepath': filepath,
-                    'date_info': date_info
-                }
-                results.append(result)
-                bank_dates[bank] = date_info
-
-                progress['partial_results'] = list(results)
-
-                status = "✅" if success else "❌"
-                msg = f"  {status} {bank} ({bank_elapsed:.1f}초) - 공시일: {date_info}"
-                logger.log_message(msg)
-                if log_file:
-                    _append_log_to_file(log_file, msg)
-                _sync_logs(logger)
-
-            scrape_elapsed = _elapsed(phase_start)
-            success_count = sum(1 for r in results if r.get('success'))
-            msg = f"[1단계 완료] 스크래핑 {scrape_elapsed} (성공 {success_count}/{total_banks})"
+            status = "✅" if success else "❌"
+            msg = f"  {status} {bank} ({bank_elapsed:.1f}초) - 공시일: {date_info}"
             logger.log_message(msg)
             if log_file:
                 _append_log_to_file(log_file, msg)
             _sync_logs(logger)
 
-            # ========== 실패 은행 자동 재시도 ==========
-            MAX_RETRY_ROUNDS = 2
-            for retry_round in range(1, MAX_RETRY_ROUNDS + 1):
-                failed_indices = [i for i, r in enumerate(results) if not r.get('success')]
-                if not failed_indices:
-                    break
+        scrape_elapsed = _elapsed(phase_start)
+        success_count = sum(1 for r in results if r.get('success'))
+        msg = f"[1단계 완료] 스크래핑 {scrape_elapsed} (성공 {success_count}/{total_banks})"
+        logger.log_message(msg)
+        if log_file:
+            _append_log_to_file(log_file, msg)
+        _sync_logs(logger)
 
-                failed_banks = [results[i]['bank'] for i in failed_indices]
-                retry_msg = (
-                    f"\n{'='*50}\n"
-                    f"[재시도 {retry_round}/{MAX_RETRY_ROUNDS}] "
-                    f"실패 은행 {len(failed_banks)}개: {', '.join(failed_banks)}\n"
-                    f"{'='*50}"
-                )
-                logger.log_message(retry_msg)
+        # ========== 실패 은행 자동 재시도 ==========
+        MAX_RETRY_ROUNDS = 2
+        for retry_round in range(1, MAX_RETRY_ROUNDS + 1):
+            failed_indices = [i for i, r in enumerate(results) if not r.get('success')]
+            if not failed_indices:
+                break
+
+            failed_banks = [results[i]['bank'] for i in failed_indices]
+            retry_msg = (
+                f"\n{'='*50}\n"
+                f"[재시도 {retry_round}/{MAX_RETRY_ROUNDS}] "
+                f"실패 은행 {len(failed_banks)}개: {', '.join(failed_banks)}\n"
+                f"{'='*50}"
+            )
+            logger.log_message(retry_msg)
+            if log_file:
+                _append_log_to_file(log_file, retry_msg)
+            _sync_logs(logger)
+
+            progress['phase'] = 'retrying'
+            progress['retry_round'] = retry_round
+            progress['retry_total_rounds'] = MAX_RETRY_ROUNDS
+            progress['total_banks'] = len(failed_banks)
+
+            for retry_idx, orig_idx in enumerate(failed_indices):
+                bank = results[orig_idx]['bank']
+                progress['current_bank'] = bank
+                progress['current_idx'] = retry_idx + 1
+
+                elapsed = time.time() - start_time
+                shared['elapsed_time'] = elapsed
+
+                bank_start = time.time()
+                filepath, success, date_info = scraper.scrape_bank(bank)
+                bank_elapsed = time.time() - bank_start
+
+                if success:
+                    results[orig_idx] = {
+                        'bank': bank,
+                        'success': True,
+                        'filepath': filepath,
+                        'date_info': date_info
+                    }
+                    bank_dates[bank] = date_info
+                    msg = f"  ✅ [재시도 성공] {bank} ({bank_elapsed:.1f}초)"
+                else:
+                    msg = f"  ❌ [재시도 실패] {bank} ({bank_elapsed:.1f}초)"
+                logger.log_message(msg)
                 if log_file:
-                    _append_log_to_file(log_file, retry_msg)
+                    _append_log_to_file(log_file, msg)
+
+                progress['partial_results'] = list(results)
                 _sync_logs(logger)
-
-                progress['phase'] = 'retrying'
-                progress['retry_round'] = retry_round
-                progress['retry_total_rounds'] = MAX_RETRY_ROUNDS
-                progress['total_banks'] = len(failed_banks)
-
-                for retry_idx, orig_idx in enumerate(failed_indices):
-                    bank = results[orig_idx]['bank']
-                    progress['current_bank'] = bank
-                    progress['current_idx'] = retry_idx + 1
-
-                    elapsed = time.time() - start_time
-                    shared['elapsed_time'] = elapsed
-
-                    bank_start = time.time()
-                    try:
-                        filepath, success, date_info = scraper.scrape_bank(bank, driver=driver)
-                    except Exception:
-                        _cleanup_driver(driver)
-                        import gc; gc.collect()
-                        driver = create_driver(logger=logger)
-                        filepath, success, date_info = scraper.scrape_bank(bank, driver=driver)
-                    bank_elapsed = time.time() - bank_start
-
-                    if success:
-                        results[orig_idx] = {
-                            'bank': bank,
-                            'success': True,
-                            'filepath': filepath,
-                            'date_info': date_info
-                        }
-                        bank_dates[bank] = date_info
-                        msg = f"  ✅ [재시도 성공] {bank} ({bank_elapsed:.1f}초)"
-                    else:
-                        msg = f"  ❌ [재시도 실패] {bank} ({bank_elapsed:.1f}초)"
-                    logger.log_message(msg)
-                    if log_file:
-                        _append_log_to_file(log_file, msg)
-
-                    progress['partial_results'] = list(results)
-                    _sync_logs(logger)
-
-        finally:
-            # 스크래핑+재시도 완료 → Chrome 종료, GC, Thread B에 신호
-            _cleanup_driver(driver)
-            import gc; gc.collect()
-            shared['chrome_phase_done'] = True
 
         # 최종 실패 은행 로그
         final_failed = [r['bank'] for r in results if not r.get('success')]
@@ -2115,6 +2046,9 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
         shared['results'] = results
         shared['bank_dates'] = bank_dates
 
+        # Chrome 사용 구간 종료 — Thread B에 Chrome 해제 알림
+        shared['chrome_phase_done'] = True
+
         # ZIP 압축
         if auto_zip:
             progress['phase'] = 'zipping'
@@ -2124,18 +2058,6 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
             if zip_path:
                 shared['zip_path'] = zip_path
                 logger.log_message(f"[2단계 완료] ZIP 생성 ({_elapsed(phase_start)})")
-                # ZIP에 포함된 개별 Excel 파일 삭제 (디스크 ~80MB 절약)
-                _cleaned = 0
-                for r in results:
-                    fp = r.get('filepath')
-                    if fp and os.path.exists(fp):
-                        try:
-                            os.remove(fp)
-                            _cleaned += 1
-                        except Exception:
-                            pass
-                if _cleaned:
-                    logger.log_message(f"  개별 Excel {_cleaned}개 삭제 (디스크 절약)")
 
         # ChatGPT 엑셀 생성
         if use_gemini and api_key and EXCEL_GENERATOR_AVAILABLE:
@@ -2209,6 +2131,7 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
         progress['phase'] = 'error'
 
     finally:
+        shared['chrome_phase_done'] = True   # Thread B 대기 해제 (에러 시에도)
         shared['scraping_running'] = False
 
 
@@ -2437,17 +2360,6 @@ def _disclosure_worker(shared, save_path=None, selected_banks=None, api_key=None
                 shared['zip_path'] = zip_path
                 zip_size_mb = os.path.getsize(zip_path) / (1024 * 1024)
                 log_callback(f"ZIP 압축 완료: {files_added}개 파일, {zip_size_mb:.1f} MB")
-                # ZIP에 포함된 개별 파일 삭제 (디스크 절약)
-                _cleaned = 0
-                for fpath in downloaded_files:
-                    if os.path.isfile(fpath) and not fpath.endswith('.zip'):
-                        try:
-                            os.remove(fpath)
-                            _cleaned += 1
-                        except Exception:
-                            pass
-                if _cleaned:
-                    log_callback(f"  개별 파일 {_cleaned}개 삭제 (디스크 절약)")
             else:
                 log_callback("ZIP 파일에 추가된 파일이 없습니다.")
         else:

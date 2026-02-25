@@ -10,8 +10,6 @@ import random
 import json
 import re
 import zipfile
-import atexit
-import signal
 from datetime import datetime
 from io import StringIO
 import io
@@ -31,37 +29,6 @@ import pandas as pd
 import warnings
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
-
-
-def _kill_all_chrome_processes():
-    """프로세스 종료 시 모든 Chrome/chromedriver 좀비를 강제 종료"""
-    try:
-        import psutil
-        current_pid = os.getpid()
-        for proc in psutil.process_iter(['pid', 'name', 'ppid']):
-            try:
-                name = (proc.info.get('name') or '').lower()
-                if any(n in name for n in ('chrom', 'chromedriver')):
-                    # 현재 프로세스의 자식만 종료
-                    if proc.info.get('ppid') == current_pid or proc.ppid() == current_pid:
-                        proc.kill()
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-
-atexit.register(_kill_all_chrome_processes)
-
-# SIGTERM 수신 시에도 Chrome 정리 (Streamlit Cloud가 컨테이너 종료 시 발송)
-def _sigterm_handler(signum, frame):
-    _kill_all_chrome_processes()
-    sys.exit(0)
-
-try:
-    signal.signal(signal.SIGTERM, _sigterm_handler)
-except Exception:
-    pass  # 메인 스레드가 아닌 경우 무시
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
@@ -160,23 +127,14 @@ class StreamlitLogger:
         return "\n".join(self.messages)
 
 
-def create_driver(logger=None):
+def create_driver():
     """Streamlit Cloud 환경에 맞는 Chrome 드라이버 생성 (고유 프로필 사용)
 
     동시 생성 방지를 위해 글로벌 락 사용 — webdriver-manager 파일 잠금 충돌 방지.
     """
-    def _log(msg):
-        if logger:
-            logger.log_message(msg)
-
     # 다른 스레드의 Chrome 생성이 완료될 때까지 대기 (최대 120초)
-    _log("  Chrome 드라이버 생성 대기 중...")
     acquired = _chrome_init_lock.acquire(timeout=120)
-    if not acquired:
-        _log("  ⚠️ Chrome 드라이버 생성 락 타임아웃 (120초) — 강제 진행")
-
     try:
-        _log("  Chrome 드라이버 생성 시작...")
         return _create_driver_internal()
     finally:
         if acquired:
@@ -191,7 +149,7 @@ def _create_driver_internal():
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
         options.add_argument('--disable-gpu')
-        options.add_argument('--window-size=800,600')
+        options.add_argument('--window-size=1280,800')
 
         # DOM 준비 시 즉시 진행 (전체 리소스 로드 대기 안 함)
         options.page_load_strategy = 'eager'
@@ -206,31 +164,6 @@ def _create_driver_internal():
         options.add_argument('--disable-infobars')
         options.add_argument('--disable-notifications')
         options.add_argument('--disable-popup-blocking')
-
-        # ── 극단적 메모리 절약 (Streamlit Cloud ~1GB 제한 대응) ──
-        # 네트워크/백그라운드 비활성화
-        options.add_argument('--disable-background-networking')
-        options.add_argument('--disable-default-apps')
-        options.add_argument('--disable-sync')
-        options.add_argument('--disable-translate')
-        options.add_argument('--disable-background-timer-throttling')
-        options.add_argument('--disable-component-update')
-        options.add_argument('--disable-domain-reliability')
-        options.add_argument('--no-first-run')
-        # 렌더러 프로세스 제한 (가장 큰 메모리 절약)
-        options.add_argument('--renderer-process-limit=1')
-        options.add_argument('--disable-features=IsolateOrigins,site-per-process')
-        # 캐시/디스크 비활성화
-        options.add_argument('--disk-cache-size=0')
-        options.add_argument('--media-cache-size=0')
-        options.add_argument('--disable-application-cache')
-        options.add_argument('--aggressive-cache-discard')
-        # JS 힙 제한 (128MB)
-        options.add_argument('--js-flags=--max-old-space-size=128 --expose-gc')
-        # 폰트/렌더링 최소화
-        options.add_argument('--font-render-hinting=none')
-        options.add_argument('--disable-features=TranslateUI')
-        options.add_argument('--disable-features=AudioServiceOutOfProcess')
 
         prefs = {
             'profile.default_content_setting_values': {
@@ -282,77 +215,7 @@ def _create_driver_internal():
                 driver = webdriver.Chrome(options=options)
 
         driver.set_page_load_timeout(30)
-        driver.set_script_timeout(30)  # execute_script 무한 행 방지
         return driver
-
-
-def _release_dom_memory(driver):
-    """Chrome의 DOM/JS 메모리를 해제 (드라이버는 유지)"""
-    try:
-        driver.get('about:blank')
-        driver.execute_script('window.gc && window.gc()')
-    except Exception:
-        pass
-
-
-def _cleanup_driver(driver):
-    """Chrome 드라이버를 종료하고 좀비 프로세스/임시 디렉토리를 확실히 정리"""
-    if not driver:
-        return
-    # 1. user-data-dir 경로 추출
-    user_data_dir = None
-    try:
-        for arg in driver.options.arguments:
-            if arg.startswith('--user-data-dir='):
-                user_data_dir = arg.split('=', 1)[1]
-                break
-    except Exception:
-        pass
-
-    # 2. Chrome 프로세스 PID 확보 (quit 실패 시 강제 종료용)
-    chrome_pid = None
-    try:
-        if driver.service and driver.service.process:
-            chrome_pid = driver.service.process.pid
-    except Exception:
-        pass
-
-    # 3. 정상 종료 시도
-    try:
-        driver.quit()
-    except Exception:
-        pass
-
-    # 4. 좀비 프로세스 강제 종료 (driver.quit 실패 시)
-    if chrome_pid:
-        try:
-            import psutil
-            parent = psutil.Process(chrome_pid)
-            children = parent.children(recursive=True)
-            for child in children:
-                try:
-                    child.kill()
-                except Exception:
-                    pass
-            try:
-                parent.kill()
-            except Exception:
-                pass
-        except Exception:
-            # psutil 실패 시 os.kill 폴백
-            try:
-                import signal as _sig
-                os.kill(chrome_pid, _sig.SIGKILL)
-            except Exception:
-                pass
-
-    # 5. 임시 프로필 디렉토리 정리
-    if user_data_dir and os.path.exists(user_data_dir):
-        import shutil
-        try:
-            shutil.rmtree(user_data_dir, ignore_errors=True)
-        except Exception:
-            pass
 
 
 class BankScraper:
@@ -577,19 +440,14 @@ class BankScraper:
         except Exception as e:
             return []
 
-    def scrape_bank(self, bank_name, progress_callback=None, driver=None):
-        """단일 은행 데이터 스크래핑 - 날짜 정보도 반환
-
-        Args:
-            driver: 외부에서 전달된 Chrome 드라이버 (None이면 내부에서 생성/종료)
-        """
-        own_driver = driver is None
+    def scrape_bank(self, bank_name, progress_callback=None):
+        """단일 은행 데이터 스크래핑 - 날짜 정보도 반환"""
+        driver = None
         date_info = "날짜 정보 없음"
 
         try:
+            driver = create_driver()
             self.logger.log_message(f"[시작] {bank_name} 은행 스크래핑")
-            if own_driver:
-                driver = create_driver(logger=self.logger)
 
             if not self.select_bank(driver, bank_name):
                 self.logger.log_message(f"{bank_name} 선택 실패")
@@ -635,9 +493,6 @@ class BankScraper:
                             df.to_excel(writer, sheet_name=sheet_name, index=False)
 
                 self.logger.log_message(f"[완료] {bank_name} 저장완료")
-                # 데이터 저장 완료 → DOM 메모리 해제
-                result_data.clear()
-                _release_dom_memory(driver)
                 return filepath, True, date_info
 
             return None, False, date_info
@@ -646,11 +501,24 @@ class BankScraper:
             self.logger.log_message(f"{bank_name} 스크래핑 오류: {str(e)}")
             return None, False, date_info
         finally:
-            # 외부 드라이버: DOM만 정리 (드라이버 자체는 호출자가 관리)
-            if not own_driver and driver:
-                _release_dom_memory(driver)
-            elif own_driver and driver:
-                _cleanup_driver(driver)
+            if driver:
+                # user-data-dir 경로 보존 후 드라이버 종료
+                user_data_dir = None
+                for arg in driver.options.arguments:
+                    if arg.startswith('--user-data-dir='):
+                        user_data_dir = arg.split('=', 1)[1]
+                        break
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+                # Chrome 임시 프로필 정리
+                if user_data_dir and os.path.exists(user_data_dir):
+                    import shutil
+                    try:
+                        shutil.rmtree(user_data_dir, ignore_errors=True)
+                    except Exception:
+                        pass
 
     def scrape_multiple_banks(self, banks, progress_callback=None):
         """여러 은행 스크래핑"""
