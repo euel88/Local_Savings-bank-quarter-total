@@ -1935,15 +1935,25 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
         results = []
         bank_dates = {}
 
+        # 메모리 상태 로깅
+        _mem_info = ""
+        try:
+            import psutil
+            mem = psutil.virtual_memory()
+            _mem_info = f" | 메모리: {mem.percent}% ({mem.used // (1024*1024)}MB / {mem.total // (1024*1024)}MB)"
+        except Exception:
+            pass
+
         logger.log_message(f"{'='*50}")
-        logger.log_message(f"[1단계] 스크래핑 시작 ({total_banks}개 은행)")
+        logger.log_message(f"[1단계] 스크래핑 시작 ({total_banks}개 은행){_mem_info}")
         logger.log_message(f"{'='*50}")
         if log_file:
             _append_log_to_file(log_file, f"[스크래핑] 시작 ({total_banks}개 은행)")
         _sync_logs(logger)
         phase_start = time.time()
 
-        # ── Chrome 1회 생성 → 79개 은행 재사용 (기존: 은행마다 생성/종료) ──
+        # ── Chrome 재활용 전략: 20개 은행마다 Chrome 재시작 (메모리 누적 방지) ──
+        _RECYCLE_EVERY = 20
         driver = create_driver(logger=logger)
         try:
             for idx, bank in enumerate(selected_banks):
@@ -1953,6 +1963,20 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
                 elapsed = time.time() - start_time
                 shared['elapsed_time'] = elapsed
 
+                # 주기적 Chrome 재활용 (메모리 누적 방지)
+                if idx > 0 and idx % _RECYCLE_EVERY == 0:
+                    _cleanup_driver(driver)
+                    import gc; gc.collect()
+                    _mem_log = ""
+                    try:
+                        import psutil
+                        mem = psutil.virtual_memory()
+                        _mem_log = f" (메모리: {mem.percent}%)"
+                    except Exception:
+                        pass
+                    logger.log_message(f"  🔄 Chrome 재활용 ({idx}/{total_banks}){_mem_log}")
+                    driver = create_driver(logger=logger)
+
                 bank_start = time.time()
                 try:
                     filepath, success, date_info = scraper.scrape_bank(bank, driver=driver)
@@ -1960,6 +1984,7 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
                     # 드라이버 세션이 죽은 경우 재생성
                     logger.log_message(f"  ⚠️ 드라이버 오류, 재생성: {str(e)[:50]}")
                     _cleanup_driver(driver)
+                    import gc; gc.collect()
                     driver = create_driver(logger=logger)
                     filepath, success, date_info = scraper.scrape_bank(bank, driver=driver)
                 bank_elapsed = time.time() - bank_start
@@ -2027,6 +2052,7 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
                         filepath, success, date_info = scraper.scrape_bank(bank, driver=driver)
                     except Exception:
                         _cleanup_driver(driver)
+                        import gc; gc.collect()
                         driver = create_driver(logger=logger)
                         filepath, success, date_info = scraper.scrape_bank(bank, driver=driver)
                     bank_elapsed = time.time() - bank_start
@@ -2050,8 +2076,9 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
                     _sync_logs(logger)
 
         finally:
-            # 스크래핑+재시도 완료 → Chrome 종료, Thread B에 신호
+            # 스크래핑+재시도 완료 → Chrome 종료, GC, Thread B에 신호
             _cleanup_driver(driver)
+            import gc; gc.collect()
             shared['chrome_phase_done'] = True
 
         # 최종 실패 은행 로그
