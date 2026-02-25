@@ -678,14 +678,17 @@ def patch_excel_with_delinquency(
                 current_col = idx
 
         if company_col is None:
-            log("회사명 컬럼을 찾을 수 없습니다.")
+            log(f"회사명 컬럼을 찾을 수 없습니다. (헤더: {header_row})")
             wb.close()
             return False
 
         if prior_col is None and current_col is None:
-            log("연체율 컬럼을 찾을 수 없습니다.")
+            log(f"연체율 컬럼을 찾을 수 없습니다. (헤더: {header_row})")
             wb.close()
             return False
+
+        log(f"  컬럼 위치: 회사명={company_col}, 연체율_전기={prior_col}, 연체율_당기={current_col}")
+        log(f"  PDF 연체율 데이터: {len(delinquency_data)}개 은행")
 
         patched = 0
         for row_idx in range(2, ws.max_row + 1):
@@ -709,30 +712,28 @@ def patch_excel_with_delinquency(
                         break
 
             if not matched_data:
+                log(f"  ⚠️ '{bank_name}' 매칭 실패 (PDF 은행 목록: {list(delinquency_data.keys())[:5]}...)")
                 continue
 
             updated = False
+            # PDF OCR 추출 데이터가 ChatGPT 추정치보다 신뢰도가 높으므로 항상 덮어씀
             if prior_col is not None and matched_data.get("연체율_전기"):
                 cell = ws.cell(row=row_idx, column=prior_col + 1)
-                existing = cell.value
-                if not existing or str(existing).strip() in ("", "-", "0", "0.0"):
-                    try:
-                        cell.value = float(matched_data["연체율_전기"])
-                        cell.number_format = '0.00'
-                    except (ValueError, TypeError):
-                        cell.value = matched_data["연체율_전기"]
-                    updated = True
+                try:
+                    cell.value = float(matched_data["연체율_전기"])
+                    cell.number_format = '0.00'
+                except (ValueError, TypeError):
+                    cell.value = matched_data["연체율_전기"]
+                updated = True
 
             if current_col is not None and matched_data.get("연체율_당기"):
                 cell = ws.cell(row=row_idx, column=current_col + 1)
-                existing = cell.value
-                if not existing or str(existing).strip() in ("", "-", "0", "0.0"):
-                    try:
-                        cell.value = float(matched_data["연체율_당기"])
-                        cell.number_format = '0.00'
-                    except (ValueError, TypeError):
-                        cell.value = matched_data["연체율_당기"]
-                    updated = True
+                try:
+                    cell.value = float(matched_data["연체율_당기"])
+                    cell.number_format = '0.00'
+                except (ValueError, TypeError):
+                    cell.value = matched_data["연체율_당기"]
+                updated = True
 
             if updated:
                 patched += 1
