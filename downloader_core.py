@@ -44,11 +44,11 @@ except ImportError:
 # ============================================================
 TARGET_URL = "https://www.fsb.or.kr/busmagepbnf_0100.act"
 MAX_RETRY_ATTEMPTS = 5
-DOWNLOAD_TIMEOUT = 45
+DOWNLOAD_TIMEOUT = 30
 REFRESH_INTERVAL = 15
 TABLE_SELECTOR = "table tbody tr"
 MEMORY_THRESHOLD = 80
-PAGE_LOAD_TIMEOUT = 30
+PAGE_LOAD_TIMEOUT = 15
 INITIAL_BACKOFF = 2
 
 
@@ -246,8 +246,8 @@ class DisclosureDownloader:
             driver = webdriver.Chrome(options=chrome_options)
 
         driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
-        driver.set_script_timeout(30)  # execute_script 무한 행 방지
-        driver.implicitly_wait(10)
+        driver.set_script_timeout(15)  # execute_script 무한 행 방지
+        driver.implicitly_wait(5)
 
         # Chrome DevTools Protocol 다운로드 설정
         driver.execute_cdp_cmd("Page.setDownloadBehavior", {
@@ -287,7 +287,7 @@ class DisclosureDownloader:
                 WebDriverWait(self.driver, PAGE_LOAD_TIMEOUT).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, TABLE_SELECTOR))
                 )
-                time.sleep(1)
+                time.sleep(0.3)
                 self.log("드라이버 복구 성공", 1)
                 return
             except Exception as e:
@@ -310,10 +310,10 @@ class DisclosureDownloader:
         try:
             self.log("페이지 새로고침 중...", 1)
             self.driver.refresh()
-            WebDriverWait(self.driver, 20).until(
+            WebDriverWait(self.driver, 12).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, TABLE_SELECTOR))
             )
-            time.sleep(1)
+            time.sleep(0.3)
             self.log("페이지 새로고침 완료", 1)
             return True
         except Exception as e:
@@ -323,7 +323,7 @@ class DisclosureDownloader:
     def extract_bank_list(self) -> List[Dict[str, Any]]:
         """페이지에서 은행 목록과 다운로드 링크 정보 추출 (JavaScript 활용)"""
         try:
-            WebDriverWait(self.driver, 20).until(
+            WebDriverWait(self.driver, 12).until(
                 EC.presence_of_all_elements_located((By.CSS_SELECTOR, TABLE_SELECTOR))
             )
 
@@ -517,7 +517,7 @@ class DisclosureDownloader:
 
                     except StaleElementReferenceException:
                         self.log(f"  DOM 변경 감지, 재시도... ({retry + 1})", 2)
-                        time.sleep(1)
+                        time.sleep(0.5)
                     except Exception as e:
                         self.log(f"  {file_type} 오류: {str(e)[:50]}", 1)
                         result[file_type] = f"오류: {str(e)[:30]}"
@@ -581,9 +581,9 @@ class DisclosureDownloader:
             try:
                 self.log(f"웹사이트 접속 중... (시도 {attempt + 1}/{MAX_RETRY_ATTEMPTS})")
                 self.driver.get(TARGET_URL)
-                time.sleep(2)
+                time.sleep(0.5)
 
-                WebDriverWait(self.driver, 20).until(
+                WebDriverWait(self.driver, 12).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, TABLE_SELECTOR))
                 )
 
@@ -595,7 +595,7 @@ class DisclosureDownloader:
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 16)
                 self.driver.refresh()
-                time.sleep(2)
+                time.sleep(0.5)
 
             except TimeoutException:
                 self.log(f"페이지 로드 타임아웃 (시도 {attempt + 1}/{MAX_RETRY_ATTEMPTS})")
@@ -605,7 +605,7 @@ class DisclosureDownloader:
                     backoff = min(backoff * 2, 16)
                     try:
                         self.driver.refresh()
-                        time.sleep(2)
+                        time.sleep(0.5)
                     except Exception:
                         # refresh 실패 시 새로 접속
                         self.log("새로고침 실패, 페이지 재접속 시도", 1)
@@ -725,7 +725,7 @@ class DisclosureDownloader:
             WebDriverWait(self.driver, PAGE_LOAD_TIMEOUT).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, TABLE_SELECTOR))
             )
-            time.sleep(1)
+            time.sleep(0.3)
 
             extracted = self.extract_bank_list()
             name_to_data = {b['name']: b for b in extracted}
@@ -739,7 +739,7 @@ class DisclosureDownloader:
                 WebDriverWait(self.driver, PAGE_LOAD_TIMEOUT).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, TABLE_SELECTOR))
                 )
-                time.sleep(1)
+                time.sleep(0.3)
                 extracted = self.extract_bank_list()
                 name_to_data = {b['name']: b for b in extracted}
                 for bank in bank_list[current_index:]:
