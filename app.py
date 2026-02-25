@@ -17,7 +17,58 @@ import tempfile
 import threading
 import zipfile
 import base64
+import logging
 from datetime import datetime
+
+# ============================================================
+# 로그 파일 관리 — 세션 초기화/앱 재시작 후에도 확인 가능
+# ============================================================
+_LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+os.makedirs(_LOG_DIR, exist_ok=True)
+_log_file_lock = threading.Lock()
+
+
+def _get_log_filepath(session_id: str = None) -> str:
+    """현재 세션의 로그 파일 경로 반환"""
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    name = f"session_{ts}.log" if not session_id else f"session_{session_id}.log"
+    return os.path.join(_LOG_DIR, name)
+
+
+def _append_log_to_file(log_path: str, msg: str):
+    """로그 메시지를 파일에 안전하게 추가"""
+    try:
+        with _log_file_lock:
+            with open(log_path, "a", encoding="utf-8") as f:
+                ts = datetime.now().strftime("%H:%M:%S")
+                f.write(f"[{ts}] {msg}\n")
+    except Exception:
+        pass
+
+
+def _read_log_file(log_path: str) -> str:
+    """로그 파일 전체 내용 읽기"""
+    try:
+        if os.path.exists(log_path):
+            with open(log_path, "r", encoding="utf-8") as f:
+                return f.read()
+    except Exception:
+        pass
+    return ""
+
+
+def _list_log_files() -> list:
+    """최신순으로 정렬된 로그 파일 목록 반환"""
+    try:
+        files = [f for f in os.listdir(_LOG_DIR) if f.endswith(".log")]
+        files.sort(reverse=True)
+        return files
+    except Exception:
+        return []
+
+
+# 인메모리 로그 최대 크기 (이보다 오래된 것은 트리밍)
+_MAX_INMEMORY_LOGS = 200
 
 # 엑셀 생성 모듈 임포트
 try:
@@ -659,7 +710,12 @@ def _render_scraping_progress():
     if not is_running and phase in ('done', 'error'):
         if st.session_state.scraping_running:
             _sync_scraping_to_session()
-            st.rerun()
+            # 다른 fragment의 rerun과 충돌 방지 — 짧은 딜레이 후 rerun
+            time.sleep(0.3)
+            try:
+                st.rerun()
+            except Exception:
+                pass
         return
 
     # 진행 중 UI
@@ -717,7 +773,12 @@ def _render_disclosure_progress():
     if not is_running and phase in ('done', 'error'):
         if st.session_state.disclosure_running:
             _sync_disclosure_to_session()
-            st.rerun()
+            # 다른 fragment의 rerun과 충돌 방지 — 짧은 딜레이 후 rerun
+            time.sleep(0.5)
+            try:
+                st.rerun()
+            except Exception:
+                pass
         return
 
     # 진행 중 UI
@@ -976,9 +1037,10 @@ def main():
         """, unsafe_allow_html=True)
         st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
+        # 현재 세션 로그
         if st.session_state.logs:
-            log_text = "\n".join(st.session_state.logs)
-            st.text_area("스크래핑 실행 로그", value=log_text, height=400, disabled=True)
+            log_text = "\n".join(st.session_state.logs[-_MAX_INMEMORY_LOGS:])
+            st.text_area("스크래핑 실행 로그 (현재 세션)", value=log_text, height=400, disabled=True)
             if st.button("🗑️ 로그 지우기", key="clear_logs_page"):
                 st.session_state.logs = []
                 st.rerun()
@@ -987,8 +1049,53 @@ def main():
 
         if st.session_state.disclosure_logs:
             st.divider()
-            log_text_dl = "\n".join(st.session_state.disclosure_logs)
-            st.text_area("공시파일 다운로드 로그", value=log_text_dl, height=300, disabled=True)
+            dl_logs = st.session_state.disclosure_logs
+            if len(dl_logs) > _MAX_INMEMORY_LOGS:
+                dl_logs = dl_logs[-_MAX_INMEMORY_LOGS:]
+            log_text_dl = "\n".join(dl_logs)
+            st.text_area("공시파일 다운로드 로그 (현재 세션)", value=log_text_dl, height=300, disabled=True)
+
+        # ========== 저장된 로그 파일 열람 (세션 초기화/크래시 후에도 확인 가능) ==========
+        st.divider()
+        st.markdown("#### 저장된 로그 파일")
+        st.caption(f"로그 저장 위치: `{_LOG_DIR}`  |  세션이 초기화되거나 앱이 재시작되어도 이전 로그를 확인할 수 있습니다.")
+
+        log_files = _list_log_files()
+        if log_files:
+            # 현재 세션 로그 파일 표시
+            current_log = st.session_state.get('_current_log_file', '')
+            if current_log:
+                current_name = os.path.basename(current_log)
+                st.info(f"현재 세션 로그: `{current_name}`")
+
+            selected_log = st.selectbox(
+                "로그 파일 선택",
+                options=log_files,
+                index=0,
+                key="log_file_selector"
+            )
+            if selected_log:
+                log_content = _read_log_file(os.path.join(_LOG_DIR, selected_log))
+                if log_content:
+                    st.text_area(
+                        f"로그 내용: {selected_log}",
+                        value=log_content,
+                        height=400,
+                        disabled=True,
+                        key="saved_log_content"
+                    )
+                    st.download_button(
+                        label="로그 파일 다운로드",
+                        data=log_content.encode("utf-8"),
+                        file_name=selected_log,
+                        mime="text/plain",
+                        key="download_log_file"
+                    )
+                else:
+                    st.warning("로그 파일이 비어있습니다.")
+        else:
+            st.info("저장된 로그 파일이 없습니다.")
+
         return
 
     # --- Reports 페이지 ---
@@ -1790,12 +1897,23 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
     progress['phase'] = 'scraping'
     progress['partial_results'] = []
 
+    # 로그 파일 경로 설정 (세션 초기화/크래시 후에도 확인 가능)
+    log_file = shared.get('_log_file_path', '')
+
     def _elapsed(since):
         """경과 시간을 읽기 쉬운 문자열로 반환"""
         sec = time.time() - since
         if sec < 60:
             return f"{sec:.1f}초"
         return f"{int(sec // 60)}분 {int(sec % 60)}초"
+
+    def _sync_logs(logger_obj):
+        """로그를 shared dict에 동기화 (메모리 절약: 최근 N개만 유지)"""
+        msgs = logger_obj.messages
+        if len(msgs) > _MAX_INMEMORY_LOGS:
+            shared['logs'] = msgs[-_MAX_INMEMORY_LOGS:]
+        else:
+            shared['logs'] = msgs.copy()
 
     try:
         config = Config(scrape_type, output_dir=save_path if save_path else None)
@@ -1810,7 +1928,9 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
         logger.log_message(f"{'='*50}")
         logger.log_message(f"[1단계] 스크래핑 시작 ({total_banks}개 은행)")
         logger.log_message(f"{'='*50}")
-        shared['logs'] = logger.messages.copy()
+        if log_file:
+            _append_log_to_file(log_file, f"[스크래핑] 시작 ({total_banks}개 은행)")
+        _sync_logs(logger)
         phase_start = time.time()
 
         for idx, bank in enumerate(selected_banks):
@@ -1836,13 +1956,19 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
             progress['partial_results'] = list(results)
 
             status = "✅" if success else "❌"
-            logger.log_message(f"  {status} {bank} ({bank_elapsed:.1f}초) - 공시일: {date_info}")
-            shared['logs'] = logger.messages.copy()
+            msg = f"  {status} {bank} ({bank_elapsed:.1f}초) - 공시일: {date_info}"
+            logger.log_message(msg)
+            if log_file:
+                _append_log_to_file(log_file, msg)
+            _sync_logs(logger)
 
         scrape_elapsed = _elapsed(phase_start)
         success_count = sum(1 for r in results if r.get('success'))
-        logger.log_message(f"[1단계 완료] 스크래핑 {scrape_elapsed} (성공 {success_count}/{total_banks})")
-        shared['logs'] = logger.messages.copy()
+        msg = f"[1단계 완료] 스크래핑 {scrape_elapsed} (성공 {success_count}/{total_banks})"
+        logger.log_message(msg)
+        if log_file:
+            _append_log_to_file(log_file, msg)
+        _sync_logs(logger)
 
         # ========== 실패 은행 자동 재시도 ==========
         MAX_RETRY_ROUNDS = 2
@@ -1852,13 +1978,16 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
                 break
 
             failed_banks = [results[i]['bank'] for i in failed_indices]
-            logger.log_message(
+            retry_msg = (
                 f"\n{'='*50}\n"
                 f"[재시도 {retry_round}/{MAX_RETRY_ROUNDS}] "
                 f"실패 은행 {len(failed_banks)}개: {', '.join(failed_banks)}\n"
                 f"{'='*50}"
             )
-            shared['logs'] = logger.messages.copy()
+            logger.log_message(retry_msg)
+            if log_file:
+                _append_log_to_file(log_file, retry_msg)
+            _sync_logs(logger)
 
             progress['phase'] = 'retrying'
             progress['retry_round'] = retry_round
@@ -1885,22 +2014,26 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
                         'date_info': date_info
                     }
                     bank_dates[bank] = date_info
-                    logger.log_message(f"  ✅ [재시도 성공] {bank} ({bank_elapsed:.1f}초)")
+                    msg = f"  ✅ [재시도 성공] {bank} ({bank_elapsed:.1f}초)"
                 else:
-                    logger.log_message(f"  ❌ [재시도 실패] {bank} ({bank_elapsed:.1f}초)")
+                    msg = f"  ❌ [재시도 실패] {bank} ({bank_elapsed:.1f}초)"
+                logger.log_message(msg)
+                if log_file:
+                    _append_log_to_file(log_file, msg)
 
                 progress['partial_results'] = list(results)
-                shared['logs'] = logger.messages.copy()
+                _sync_logs(logger)
 
         # 최종 실패 은행 로그
         final_failed = [r['bank'] for r in results if not r.get('success')]
         if final_failed:
-            logger.log_message(
-                f"\n⚠️ 최종 실패 은행 {len(final_failed)}개: {', '.join(final_failed)}"
-            )
+            msg = f"\n⚠️ 최종 실패 은행 {len(final_failed)}개: {', '.join(final_failed)}"
         else:
-            logger.log_message("\n✅ 모든 은행 스크래핑 성공!")
-        shared['logs'] = logger.messages.copy()
+            msg = "\n✅ 모든 은행 스크래핑 성공!"
+        logger.log_message(msg)
+        if log_file:
+            _append_log_to_file(log_file, msg)
+        _sync_logs(logger)
 
         # 최종 경과 시간
         final_elapsed = time.time() - start_time
@@ -1925,7 +2058,9 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
             logger.log_message(f"\n{'='*50}")
             logger.log_message(f"[3단계] AI 분기총괄 엑셀 생성 시작")
             logger.log_message(f"{'='*50}")
-            shared['logs'] = logger.messages.copy()
+            if log_file:
+                _append_log_to_file(log_file, "[3단계] AI 분기총괄 엑셀 생성 시작")
+            _sync_logs(logger)
 
             try:
                 def _on_excel_ready(path):
@@ -1936,7 +2071,9 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
                 def _ai_log(msg):
                     """AI 엑셀 생성 실시간 로그 콜백"""
                     logger.log_message(msg)
-                    shared['logs'] = logger.messages.copy()
+                    if log_file:
+                        _append_log_to_file(log_file, msg)
+                    _sync_logs(logger)
 
                 gen_result = generate_excel_with_chatgpt(
                     scraped_results=results,
@@ -1973,11 +2110,16 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
         logger.log_message(f"\n{'='*50}")
         logger.log_message(f"[완료] 전체 소요시간: {total_elapsed}")
         logger.log_message(f"{'='*50}")
-        shared['logs'] = logger.messages.copy()
+        if log_file:
+            _append_log_to_file(log_file, f"[스크래핑 완료] 전체 소요시간: {total_elapsed}")
+        _sync_logs(logger)
         progress['phase'] = 'done'
 
     except Exception as e:
-        shared['logs'].append(f"[오류] {str(e)}")
+        err_msg = f"[오류] {str(e)}"
+        shared['logs'].append(err_msg)
+        if log_file:
+            _append_log_to_file(log_file, err_msg)
         progress['phase'] = 'error'
 
     finally:
@@ -2006,6 +2148,11 @@ def start_scraping(selected_banks, scrape_type, auto_zip, download_filename, use
 
     now = time.time()
 
+    # --- 로그 파일 생성 (세션 초기화/크래시 후에도 확인 가능) ---
+    log_file = _get_log_filepath()
+    _append_log_to_file(log_file, f"세션 시작: {len(selected_banks)}개 은행, 타입={scrape_type}")
+    st.session_state._current_log_file = log_file
+
     # --- Thread A: 스크래핑 (1~4단계) ---
     scraping_shared = {
         'scraping_running': True,
@@ -2017,6 +2164,7 @@ def start_scraping(selected_banks, scrape_type, auto_zip, download_filename, use
         'validation_result': None,
         'ai_table_generated': False,
         'zip_path': None,
+        '_log_file_path': log_file,
         'scraping_progress': {
             'current_bank': '',
             'current_idx': 0,
@@ -2055,6 +2203,7 @@ def start_scraping(selected_banks, scrape_type, auto_zip, download_filename, use
             'zip_path': None,
             'delinquency_excel_path': None,
             'delinquency_data': None,
+            '_log_file_path': log_file,
             # Thread B가 Thread A의 summary_excel_path를 참조하기 위한 교차 참조
             '_scraping_shared_ref': scraping_shared,
         }
@@ -2087,6 +2236,7 @@ def _disclosure_worker(shared, save_path=None, selected_banks=None, api_key=None
     """
     progress = shared['progress']
     scraping_ref = shared.get('_scraping_shared_ref')  # Thread A 공유 dict 참조
+    log_file = shared.get('_log_file_path', '')
 
     try:
         if save_path:
@@ -2096,7 +2246,12 @@ def _disclosure_worker(shared, save_path=None, selected_banks=None, api_key=None
             download_path = tempfile.mkdtemp(prefix="저축은행_공시파일_")
 
         def log_callback(msg):
+            # 인메모리 로그 크기 제한
+            if len(shared['logs']) > _MAX_INMEMORY_LOGS:
+                shared['logs'] = shared['logs'][-(_MAX_INMEMORY_LOGS // 2):]
             shared['logs'].append(msg)
+            if log_file:
+                _append_log_to_file(log_file, f"[다운로드] {msg}")
 
         progress['phase'] = 'init'
         log_callback("공시파일 다운로드 초기화 중...")
@@ -2260,7 +2415,10 @@ def _disclosure_worker(shared, save_path=None, selected_banks=None, api_key=None
     except Exception as e:
         progress['phase'] = 'error'
         progress['error_msg'] = str(e)
-        shared['logs'].append(f"오류 발생: {str(e)}")
+        err_msg = f"오류 발생: {str(e)}"
+        shared['logs'].append(err_msg)
+        if log_file:
+            _append_log_to_file(log_file, f"[다운로드 오류] {err_msg}")
 
     finally:
         shared['running'] = False
