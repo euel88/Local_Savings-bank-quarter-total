@@ -158,7 +158,7 @@ def _create_driver_internal():
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
         options.add_argument('--disable-gpu')
-        options.add_argument('--window-size=1280,800')
+        options.add_argument('--window-size=800,600')
 
         # DOM 준비 시 즉시 진행 (전체 리소스 로드 대기 안 함)
         options.page_load_strategy = 'eager'
@@ -174,16 +174,30 @@ def _create_driver_internal():
         options.add_argument('--disable-notifications')
         options.add_argument('--disable-popup-blocking')
 
-        # 메모리 절약 (Streamlit Cloud ~1GB 제한 대응)
+        # ── 극단적 메모리 절약 (Streamlit Cloud ~1GB 제한 대응) ──
+        # 네트워크/백그라운드 비활성화
         options.add_argument('--disable-background-networking')
         options.add_argument('--disable-default-apps')
         options.add_argument('--disable-sync')
         options.add_argument('--disable-translate')
         options.add_argument('--disable-background-timer-throttling')
+        options.add_argument('--disable-component-update')
+        options.add_argument('--disable-domain-reliability')
+        options.add_argument('--no-first-run')
+        # 렌더러 프로세스 제한 (가장 큰 메모리 절약)
         options.add_argument('--renderer-process-limit=1')
+        options.add_argument('--disable-features=IsolateOrigins,site-per-process')
+        # 캐시/디스크 비활성화
         options.add_argument('--disk-cache-size=0')
+        options.add_argument('--media-cache-size=0')
         options.add_argument('--disable-application-cache')
-        options.add_argument('--js-flags=--max-old-space-size=128')
+        options.add_argument('--aggressive-cache-discard')
+        # JS 힙 제한 (128MB)
+        options.add_argument('--js-flags=--max-old-space-size=128 --expose-gc')
+        # 폰트/렌더링 최소화
+        options.add_argument('--font-render-hinting=none')
+        options.add_argument('--disable-features=TranslateUI')
+        options.add_argument('--disable-features=AudioServiceOutOfProcess')
 
         prefs = {
             'profile.default_content_setting_values': {
@@ -236,6 +250,15 @@ def _create_driver_internal():
 
         driver.set_page_load_timeout(30)
         return driver
+
+
+def _release_dom_memory(driver):
+    """Chrome의 DOM/JS 메모리를 해제 (드라이버는 유지)"""
+    try:
+        driver.get('about:blank')
+        driver.execute_script('window.gc && window.gc()')
+    except Exception:
+        pass
 
 
 def _cleanup_driver(driver):
@@ -542,6 +565,9 @@ class BankScraper:
                             df.to_excel(writer, sheet_name=sheet_name, index=False)
 
                 self.logger.log_message(f"[완료] {bank_name} 저장완료")
+                # 데이터 저장 완료 → DOM 메모리 해제
+                result_data.clear()
+                _release_dom_memory(driver)
                 return filepath, True, date_info
 
             return None, False, date_info
@@ -550,8 +576,10 @@ class BankScraper:
             self.logger.log_message(f"{bank_name} 스크래핑 오류: {str(e)}")
             return None, False, date_info
         finally:
-            # 외부 드라이버는 호출자가 관리 — 여기서 종료하지 않음
-            if own_driver and driver:
+            # 외부 드라이버: DOM만 정리 (드라이버 자체는 호출자가 관리)
+            if not own_driver and driver:
+                _release_dom_memory(driver)
+            elif own_driver and driver:
                 _cleanup_driver(driver)
 
     def scrape_multiple_banks(self, banks, progress_callback=None):

@@ -691,7 +691,7 @@ def _sync_disclosure_to_session():
             st.session_state.delinquency_excel_path = shared['delinquency_excel_path']
 
 
-@st.fragment(run_every=2)
+@st.fragment(run_every=5)
 def _render_scraping_progress():
     """스크래핑(1~4단계) 실시간 진행 표시 fragment"""
     shared = st.session_state.get('_scraping_shared', {})
@@ -711,8 +711,6 @@ def _render_scraping_progress():
     if not is_running and phase in ('done', 'error'):
         if st.session_state.scraping_running:
             _sync_scraping_to_session()
-            # 다른 fragment의 rerun과 충돌 방지 — 짧은 딜레이 후 rerun
-            time.sleep(0.3)
             try:
                 st.rerun()
             except Exception:
@@ -755,7 +753,7 @@ def _render_scraping_progress():
         st.caption(f"현재까지: 성공 {success}개 / 실패 {fail}개 / 전체 {all_total}개")
 
 
-@st.fragment(run_every=2)
+@st.fragment(run_every=5)
 def _render_disclosure_progress():
     """공시파일 다운로드 실시간 진행 표시 fragment — 완료 시 session_state 동기화만 수행"""
     shared = st.session_state.get('_disclosure_shared', {})
@@ -774,8 +772,6 @@ def _render_disclosure_progress():
     if not is_running and phase in ('done', 'error'):
         if st.session_state.disclosure_running:
             _sync_disclosure_to_session()
-            # 다른 fragment의 rerun과 충돌 방지 — 짧은 딜레이 후 rerun
-            time.sleep(0.5)
             try:
                 st.rerun()
             except Exception:
@@ -1952,8 +1948,38 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
         _sync_logs(logger)
         phase_start = time.time()
 
-        # ── Chrome 재활용 전략: 20개 은행마다 Chrome 재시작 (메모리 누적 방지) ──
-        _RECYCLE_EVERY = 20
+        # ── Chrome 재활용 전략 ──
+        # 10개 은행마다 or 메모리 75% 초과 시 Chrome 재시작 (DOM 누적 메모리 방지)
+        _RECYCLE_EVERY = 10
+        _MEMORY_RECYCLE_THRESHOLD = 75  # percent
+
+        def _should_recycle(idx):
+            """주기적 또는 메모리 기반 재활용 판단"""
+            if idx > 0 and idx % _RECYCLE_EVERY == 0:
+                return True, "주기적"
+            try:
+                import psutil
+                if psutil.virtual_memory().percent > _MEMORY_RECYCLE_THRESHOLD:
+                    return True, "메모리 초과"
+            except Exception:
+                pass
+            return False, ""
+
+        def _recycle_chrome(driver, idx, reason=""):
+            """Chrome 재활용: 종료 → GC → 재생성"""
+            _cleanup_driver(driver)
+            import gc; gc.collect()
+            _mem_log = ""
+            try:
+                import psutil
+                mem = psutil.virtual_memory()
+                _mem_log = f" (메모리: {mem.percent}%, {mem.available // (1024*1024)}MB 여유)"
+            except Exception:
+                pass
+            logger.log_message(f"  🔄 Chrome 재활용 [{reason}] ({idx}/{total_banks}){_mem_log}")
+            _sync_logs(logger)
+            return create_driver(logger=logger)
+
         driver = create_driver(logger=logger)
         try:
             for idx, bank in enumerate(selected_banks):
@@ -1963,19 +1989,10 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
                 elapsed = time.time() - start_time
                 shared['elapsed_time'] = elapsed
 
-                # 주기적 Chrome 재활용 (메모리 누적 방지)
-                if idx > 0 and idx % _RECYCLE_EVERY == 0:
-                    _cleanup_driver(driver)
-                    import gc; gc.collect()
-                    _mem_log = ""
-                    try:
-                        import psutil
-                        mem = psutil.virtual_memory()
-                        _mem_log = f" (메모리: {mem.percent}%)"
-                    except Exception:
-                        pass
-                    logger.log_message(f"  🔄 Chrome 재활용 ({idx}/{total_banks}){_mem_log}")
-                    driver = create_driver(logger=logger)
+                # 주기적 또는 메모리 기반 Chrome 재활용
+                need_recycle, reason = _should_recycle(idx)
+                if need_recycle:
+                    driver = _recycle_chrome(driver, idx, reason)
 
                 bank_start = time.time()
                 try:
