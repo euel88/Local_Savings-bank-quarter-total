@@ -2124,6 +2124,18 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
             if zip_path:
                 shared['zip_path'] = zip_path
                 logger.log_message(f"[2단계 완료] ZIP 생성 ({_elapsed(phase_start)})")
+                # ZIP에 포함된 개별 Excel 파일 삭제 (디스크 ~80MB 절약)
+                _cleaned = 0
+                for r in results:
+                    fp = r.get('filepath')
+                    if fp and os.path.exists(fp):
+                        try:
+                            os.remove(fp)
+                            _cleaned += 1
+                        except Exception:
+                            pass
+                if _cleaned:
+                    logger.log_message(f"  개별 Excel {_cleaned}개 삭제 (디스크 절약)")
 
         # ChatGPT 엑셀 생성
         if use_gemini and api_key and EXCEL_GENERATOR_AVAILABLE:
@@ -2425,6 +2437,17 @@ def _disclosure_worker(shared, save_path=None, selected_banks=None, api_key=None
                 shared['zip_path'] = zip_path
                 zip_size_mb = os.path.getsize(zip_path) / (1024 * 1024)
                 log_callback(f"ZIP 압축 완료: {files_added}개 파일, {zip_size_mb:.1f} MB")
+                # ZIP에 포함된 개별 파일 삭제 (디스크 절약)
+                _cleaned = 0
+                for fpath in downloaded_files:
+                    if os.path.isfile(fpath) and not fpath.endswith('.zip'):
+                        try:
+                            os.remove(fpath)
+                            _cleaned += 1
+                        except Exception:
+                            pass
+                if _cleaned:
+                    log_callback(f"  개별 파일 {_cleaned}개 삭제 (디스크 절약)")
             else:
                 log_callback("ZIP 파일에 추가된 파일이 없습니다.")
         else:
