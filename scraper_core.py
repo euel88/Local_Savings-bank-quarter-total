@@ -136,18 +136,20 @@ class StreamlitLogger:
             return self.messages.copy()
 
 
-def create_driver():
+def create_driver(timeout=60):
     """Streamlit Cloud 환경에 맞는 Chrome 드라이버 생성 (고유 프로필 사용)
 
     동시 생성 방지를 위해 글로벌 락 사용 — webdriver-manager 파일 잠금 충돌 방지.
+    timeout: 락 대기 최대 시간(초). 기본 60초.
     """
-    # 다른 스레드의 Chrome 생성이 완료될 때까지 대기 (최대 120초)
-    acquired = _chrome_init_lock.acquire(timeout=120)
+    # 다른 스레드의 Chrome 생성이 완료될 때까지 대기
+    acquired = _chrome_init_lock.acquire(timeout=timeout)
+    if not acquired:
+        raise RuntimeError(f"Chrome 드라이버 생성 락 획득 실패 ({timeout}초 타임아웃)")
     try:
         return _create_driver_internal()
     finally:
-        if acquired:
-            _chrome_init_lock.release()
+        _chrome_init_lock.release()
 
 
 def _create_driver_internal():
@@ -224,6 +226,7 @@ def _create_driver_internal():
                 driver = webdriver.Chrome(options=options)
 
         driver.set_page_load_timeout(15)
+        driver.set_script_timeout(15)
         return driver
 
 
@@ -455,7 +458,14 @@ class BankScraper:
         date_info = "날짜 정보 없음"
 
         try:
-            driver = create_driver()
+            try:
+                driver = create_driver()
+            except RuntimeError as e:
+                self.logger.log_message(f"{bank_name} Chrome 생성 실패: {str(e)}")
+                return None, False, date_info
+            except Exception as e:
+                self.logger.log_message(f"{bank_name} Chrome 생성 오류: {str(e)[:80]}")
+                return None, False, date_info
             self.logger.log_message(f"[시작] {bank_name} 은행 스크래핑")
 
             if not self.select_bank(driver, bank_name):
