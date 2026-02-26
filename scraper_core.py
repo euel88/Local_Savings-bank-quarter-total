@@ -110,22 +110,30 @@ class WaitUtils:
 
 
 class StreamlitLogger:
-    """Streamlit용 로거 클래스"""
+    """Streamlit용 로거 클래스 (스레드 안전)"""
 
     def __init__(self, streamlit_container=None):
         self.messages = []
+        self._lock = threading.Lock()
         self.container = streamlit_container
 
     def log_message(self, message, verbose=True):
         if verbose:
             timestamp = datetime.now().strftime("%H:%M:%S")
             log_entry = f"[{timestamp}] {message}"
-            self.messages.append(log_entry)
+            with self._lock:
+                self.messages.append(log_entry)
             if self.container:
                 self.container.text(log_entry)
 
     def get_logs(self):
-        return "\n".join(self.messages)
+        with self._lock:
+            return "\n".join(self.messages)
+
+    def get_messages_snapshot(self):
+        """스레드 안전한 메시지 스냅샷 반환"""
+        with self._lock:
+            return self.messages.copy()
 
 
 def create_driver():
@@ -534,7 +542,11 @@ class BankScraper:
             if progress_callback:
                 progress_callback(bank, f"처리 중 ({idx+1}/{total})")
 
-            filepath, success, date_info = self.scrape_bank(bank, progress_callback)
+            try:
+                filepath, success, date_info = self.scrape_bank(bank, progress_callback)
+            except Exception:
+                filepath, success, date_info = None, False, "오류"
+
             result = {
                 'bank': bank,
                 'success': success,
@@ -559,7 +571,10 @@ class BankScraper:
                 for idx, bank in enumerate(banks)
             }
             for future in as_completed(futures):
-                future.result()  # 예외 전파
+                try:
+                    future.result()
+                except Exception:
+                    pass  # 개별 은행 실패는 results[idx]에 이미 기록됨
 
         return results
 
