@@ -1946,6 +1946,8 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
 
         def _scrape_one(idx, bank):
             bank_start = time.time()
+            with _results_lock:
+                progress['current_bank'] = bank
             try:
                 filepath, success, date_info = scraper.scrape_bank(bank)
             except Exception as e:
@@ -1978,17 +1980,30 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
 
             return result
 
+        PER_BANK_TIMEOUT = 90  # 은행당 최대 90초
+
         max_workers = min(config.MAX_WORKERS, total_banks)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
-                executor.submit(_scrape_one, idx, bank): bank
+                executor.submit(_scrape_one, idx, bank): (idx, bank)
                 for idx, bank in enumerate(selected_banks)
             }
-            for future in as_completed(futures):
+            for future in as_completed(futures, timeout=total_banks * PER_BANK_TIMEOUT):
+                idx, bank_name = futures[future]
                 try:
-                    future.result()
+                    future.result(timeout=PER_BANK_TIMEOUT)
+                except TimeoutError:
+                    msg = f"  ❌ {bank_name} 타임아웃 ({PER_BANK_TIMEOUT}초 초과)"
+                    logger.log_message(msg)
+                    if log_file:
+                        _append_log_to_file(log_file, msg)
+                    with _results_lock:
+                        if results[idx] is None:
+                            results[idx] = {'bank': bank_name, 'success': False, 'filepath': None, 'date_info': '타임아웃'}
+                            _completed_count[0] += 1
+                            progress['current_idx'] = _completed_count[0]
+                    _sync_logs(logger)
                 except Exception as e:
-                    bank_name = futures[future]
                     msg = f"  ❌ {bank_name} 예외: {str(e)[:100]}"
                     logger.log_message(msg)
                     if log_file:
@@ -2069,11 +2084,18 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
                     executor.submit(_retry_one, orig_idx): orig_idx
                     for orig_idx in failed_indices
                 }
-                for future in as_completed(futures):
+                for future in as_completed(futures, timeout=len(failed_indices) * PER_BANK_TIMEOUT):
+                    orig_idx = futures[future]
                     try:
-                        future.result()
+                        future.result(timeout=PER_BANK_TIMEOUT)
+                    except TimeoutError:
+                        bank_name = results[orig_idx]['bank'] if results[orig_idx] else f"idx={orig_idx}"
+                        msg = f"  ❌ [재시도 타임아웃] {bank_name}: {PER_BANK_TIMEOUT}초 초과"
+                        logger.log_message(msg)
+                        if log_file:
+                            _append_log_to_file(log_file, msg)
+                        _sync_logs(logger)
                     except Exception as e:
-                        orig_idx = futures[future]
                         bank_name = results[orig_idx]['bank'] if results[orig_idx] else f"idx={orig_idx}"
                         msg = f"  ❌ [재시도 예외] {bank_name}: {str(e)[:100]}"
                         logger.log_message(msg)
