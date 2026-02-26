@@ -62,7 +62,7 @@ class Config:
     MAX_RETRIES = 2
     PAGE_LOAD_TIMEOUT = 15
     WAIT_TIMEOUT = 8
-    MAX_WORKERS = 3
+    MAX_WORKERS = 4
 
     # 전체 79개 저축은행 목록
     BANKS = [
