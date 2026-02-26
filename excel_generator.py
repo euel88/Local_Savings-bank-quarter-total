@@ -69,7 +69,6 @@ class ExcelGeneratorConfig:
     # ChatGPT API 설정 (엑셀 작업용)
     OPENAI_MODEL = "gpt-5-mini"
     MAX_TOKENS = 4000
-    TEMPERATURE = 0.2
 
 
 def _get_column_letter(idx):
@@ -105,7 +104,6 @@ class ChatGPTExcelGenerator:
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_msg},
             ],
-            temperature=self.config.TEMPERATURE,
             max_completion_tokens=self.config.MAX_TOKENS,
             response_format={"type": "json_object"},
         )
