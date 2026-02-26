@@ -17,6 +17,7 @@ from contextlib import contextmanager
 from pathlib import Path
 import tempfile
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -521,28 +522,44 @@ class BankScraper:
                         pass
 
     def scrape_multiple_banks(self, banks, progress_callback=None):
-        """여러 은행 스크래핑"""
-        results = []
+        """여러 은행 병렬 스크래핑 (ThreadPoolExecutor)"""
         total = len(banks)
+        # 은행 순서 보존을 위해 인덱스별 슬롯 미리 할당
+        results = [None] * total
+        completed_count = 0
+        lock = threading.Lock()
 
-        for idx, bank in enumerate(banks):
+        def _scrape_one(idx, bank):
+            nonlocal completed_count
             if progress_callback:
                 progress_callback(bank, f"처리 중 ({idx+1}/{total})")
 
             filepath, success, date_info = self.scrape_bank(bank, progress_callback)
-            results.append({
+            result = {
                 'bank': bank,
                 'success': success,
                 'filepath': filepath,
                 'date_info': date_info
-            })
+            }
+
+            with lock:
+                results[idx] = result
+                completed_count += 1
 
             if progress_callback:
                 status = "완료" if success else "실패"
                 progress_callback(bank, status)
 
-            # 은행 간 딜레이
-            WaitUtils.wait_with_random(0.2, 0.4)
+            return result
+
+        max_workers = min(self.config.MAX_WORKERS, total)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(_scrape_one, idx, bank): bank
+                for idx, bank in enumerate(banks)
+            }
+            for future in as_completed(futures):
+                future.result()  # 예외 전파
 
         return results
 
