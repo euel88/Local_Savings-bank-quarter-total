@@ -137,13 +137,14 @@ class DisclosureDownloader:
         # scraper_core의 글로벌 락을 공유하여 동시 Chrome 생성 방지
         from scraper_core import _chrome_init_lock
         self.log("Chrome WebDriver 초기화 중...")
-        acquired = _chrome_init_lock.acquire(timeout=60)
+        acquired = _chrome_init_lock.acquire(timeout=120)
         if not acquired:
-            raise RuntimeError("Chrome 드라이버 생성 락 획득 실패 (60초 타임아웃)")
+            self.log("⚠️ Chrome 드라이버 생성 락 타임아웃 — 강제 진행")
         try:
             return self._create_driver_internal()
         finally:
-            _chrome_init_lock.release()
+            if acquired:
+                _chrome_init_lock.release()
 
     def _create_driver_internal(self) -> webdriver.Chrome:
         """실제 Chrome WebDriver 생성 로직 (락 내부에서 호출)"""
