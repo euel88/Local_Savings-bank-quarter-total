@@ -144,7 +144,7 @@ def _extract_with_gemini(pdf_path: str, api_key: str, log_callback=None) -> Opti
         result_text = ""
         for attempt in range(2):
             response = client.models.generate_content(
-                model="gemini-3-flash-preview",
+                model="gemini-3.1-pro-preview",
                 contents=contents,
                 config=config,
             )
