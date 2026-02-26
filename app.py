@@ -1916,11 +1916,11 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
 
     def _sync_logs(logger_obj):
         """로그를 shared dict에 동기화 (메모리 절약: 최근 N개만 유지)"""
-        msgs = logger_obj.messages
+        msgs = logger_obj.get_messages_snapshot()
         if len(msgs) > _MAX_INMEMORY_LOGS:
             shared['logs'] = msgs[-_MAX_INMEMORY_LOGS:]
         else:
-            shared['logs'] = msgs.copy()
+            shared['logs'] = msgs
 
     try:
         config = Config(scrape_type, output_dir=save_path if save_path else None)
@@ -1946,7 +1946,11 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
 
         def _scrape_one(idx, bank):
             bank_start = time.time()
-            filepath, success, date_info = scraper.scrape_bank(bank)
+            try:
+                filepath, success, date_info = scraper.scrape_bank(bank)
+            except Exception as e:
+                filepath, success, date_info = None, False, "오류"
+                logger.log_message(f"  ⚠️ {bank} 예외: {str(e)[:80]}")
             bank_elapsed = time.time() - bank_start
 
             result = {
@@ -1981,7 +1985,15 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
                 for idx, bank in enumerate(selected_banks)
             }
             for future in as_completed(futures):
-                future.result()  # 예외 전파
+                try:
+                    future.result()
+                except Exception as e:
+                    bank_name = futures[future]
+                    msg = f"  ❌ {bank_name} 예외: {str(e)[:100]}"
+                    logger.log_message(msg)
+                    if log_file:
+                        _append_log_to_file(log_file, msg)
+                    _sync_logs(logger)
 
         scrape_elapsed = _elapsed(phase_start)
         success_count = sum(1 for r in results if r and r.get('success'))
@@ -2020,7 +2032,11 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
             def _retry_one(orig_idx):
                 bank = results[orig_idx]['bank']
                 bank_start = time.time()
-                filepath, success, date_info = scraper.scrape_bank(bank)
+                try:
+                    filepath, success, date_info = scraper.scrape_bank(bank)
+                except Exception as e:
+                    filepath, success, date_info = None, False, "오류"
+                    logger.log_message(f"  ⚠️ {bank} 재시도 예외: {str(e)[:80]}")
                 bank_elapsed = time.time() - bank_start
 
                 with _results_lock:
@@ -2054,7 +2070,16 @@ def _scraping_worker(shared, selected_banks, scrape_type, auto_zip, download_fil
                     for orig_idx in failed_indices
                 }
                 for future in as_completed(futures):
-                    future.result()
+                    try:
+                        future.result()
+                    except Exception as e:
+                        orig_idx = futures[future]
+                        bank_name = results[orig_idx]['bank'] if results[orig_idx] else f"idx={orig_idx}"
+                        msg = f"  ❌ [재시도 예외] {bank_name}: {str(e)[:100]}"
+                        logger.log_message(msg)
+                        if log_file:
+                            _append_log_to_file(log_file, msg)
+                        _sync_logs(logger)
 
         # 최종 실패 은행 로그
         final_failed = [r['bank'] for r in results if r and not r.get('success')]
